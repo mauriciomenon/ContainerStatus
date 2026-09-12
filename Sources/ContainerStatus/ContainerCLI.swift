@@ -39,28 +39,78 @@ final class ContainerCLI: Sendable {
         return directories.filter { seen.insert($0).inserted }
     }
 
-    /// First executable `container` found in the given directories.
-    static func locateBinary(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> String? {
-        for directory in directories {
+    /// Every executable `container` in the given directories, priority order
+    /// preserved.
+    static func existingCandidates(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> [String] {
+        directories.compactMap { directory in
             let candidate = URL(fileURLWithPath: directory).appendingPathComponent("container").path
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
+            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
         }
-        return nil
     }
 
-    /// Resolved CLI path behind a lock so a late install can be picked up
-    /// without restarting the app.
-    private let pathLock: OSAllocatedUnfairLock<String?>
+    /// CLI version of one candidate, or nil when it does not answer with one.
+    static func probeVersion(_ path: String) -> String? {
+        parseVersion(runBinary(path, arguments: ["--version"], timeout: statusTimeout).stdout)
+    }
+
+    /// Strict semver-ish comparison ("1.4.1" > "1.3.1", "10.0" > "9.9.9");
+    /// nil (no version) always loses, equal is not newer.
+    static func isVersionNewer(_ candidate: String?, than incumbent: String?) -> Bool {
+        guard let candidate else { return false }
+        guard let incumbent else { return true }
+        let candidateParts = candidate.split(separator: ".").map { Int($0) ?? 0 }
+        let incumbentParts = incumbent.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(candidateParts.count, incumbentParts.count) {
+            let c = index < candidateParts.count ? candidateParts[index] : 0
+            let i = index < incumbentParts.count ? incumbentParts[index] : 0
+            if c != i { return c > i }
+        }
+        return false
+    }
+
+    /// A resolved CLI plus the candidate set it was chosen from, so the
+    /// instance can detect installs/uninstalls cheaply (stat-only).
+    struct ResolvedCLI: Sendable, Equatable {
+        var path: String
+        var candidates: Set<String>
+    }
+
+    /// Picks the newest candidate by version; ties keep the priority order of
+    /// the directory list.
+    static func resolveNewest(existingCandidates candidates: [String]) -> ResolvedCLI? {
+        guard var best = candidates.first else { return nil }
+        var bestVersion = probeVersion(best)
+        for candidate in candidates.dropFirst() {
+            let version = probeVersion(candidate)
+            if isVersionNewer(version, than: bestVersion) {
+                best = candidate
+                bestVersion = version
+            }
+        }
+        return ResolvedCLI(path: best, candidates: Set(candidates))
+    }
+
+    static func resolveNewest(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> ResolvedCLI? {
+        resolveNewest(existingCandidates: existingCandidates(inDirectories: directories))
+    }
+
+    /// Currently resolved CLI path (lets the controller notice upgrades and
+    /// refresh the displayed version).
+    func currentBinaryPath() -> String? { resolvedBinaryPath }
+
+    /// Resolved CLI path behind a lock so installs, upgrades and removals are
+    /// picked up without restarting the app.
+    private let pathLock: OSAllocatedUnfairLock<ResolvedCLI?>
     private let environment: [String: String]
 
     private var resolvedBinaryPath: String? {
-        pathLock.withLock { $0 }
+        pathLock.withLock { $0?.path }
     }
 
-    init(binaryPath: String? = ContainerCLI.locateBinary()) {
-        self.pathLock = OSAllocatedUnfairLock(initialState: binaryPath)
+    init(binaryPath: String? = nil) {
+        self.pathLock = OSAllocatedUnfairLock(initialState: binaryPath.map {
+            ResolvedCLI(path: $0, candidates: [])
+        })
         self.environment = [
             "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": NSHomeDirectory(),
@@ -128,12 +178,15 @@ final class ContainerCLI: Sendable {
                           environment: environment, timeout: timeout)
     }
 
-    /// Re-scans only while the CLI has not been found, so installing it later
-    /// (pkg, brew, source build) takes effect on the next poll without
-    /// relaunching the app. Zero cost once resolved.
+    /// Cheap scan on every poll: stat-only while the candidate set is
+    /// unchanged; version probes only when an install/uninstall/upgrade
+    /// changed the set, so the newest CLI wins without restarts.
     private func refreshBinaryPathIfNeeded() {
-        guard pathLock.withLock({ $0 == nil }) else { return }
-        pathLock.withLock { $0 = Self.locateBinary() }
+        let existing = Self.existingCandidates()
+        let current = pathLock.withLock { $0 }
+        if let current, current.candidates == Set(existing) { return }
+        let resolved = Self.resolveNewest(existingCandidates: existing)
+        pathLock.withLock { $0 = resolved }
     }
 
     /// Synchronous spawn with a watchdog: waits on the termination handler,

@@ -30,21 +30,36 @@ enum SelfTest {
         expect(ContainerCLI.firstLine("") == "", "firstLine empty")
         expect(ContainerCLI.firstLine("unico") == "unico", "firstLine single")
 
-        // Path resolution: found on this machine, found in a custom prefix
-        // (source build), and nil when nothing exists.
-        expect(ContainerCLI.locateBinary() != nil, "CLI resolvida nesta maquina")
-        let customDirURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("cs_scan_\(UUID().uuidString)", isDirectory: true)
-        let customDir = customDirURL.path
-        try? FileManager.default.createDirectory(atPath: customDir, withIntermediateDirectories: true)
-        let fakeCLI = customDirURL.appendingPathComponent("container").path
-        FileManager.default.createFile(atPath: fakeCLI, contents: Data("#!/bin/sh\nexit 0\n".utf8))
-        Darwin.chmod(fakeCLI, 0o755)
-        expect(ContainerCLI.locateBinary(inDirectories: [customDir, "/no/such/dir"]) == fakeCLI,
-               "resolucao acha prefixo customizado")
-        expect(ContainerCLI.locateBinary(inDirectories: ["/no/such/dir"]) == nil,
-               "diretorio sem CLI = nil")
-        try? FileManager.default.removeItem(atPath: customDir)
+        // Path resolution: found on this machine, newest version wins among
+        // candidates, nil when nothing exists.
+        expect(ContainerCLI.existingCandidates(inDirectories: ["/no/such/dir"]).isEmpty,
+               "diretorio sem CLI = nenhum candidato")
+        expect(ContainerCLI.resolveNewest(inDirectories: ["/no/such/dir"]) == nil,
+               "nada instalado = nil")
+
+        let dirOld = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cs_old_\(UUID().uuidString)", isDirectory: true)
+        let dirNew = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cs_new_\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(atPath: dirOld.path, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: dirNew.path, withIntermediateDirectories: true)
+        let oldCLI = dirOld.appendingPathComponent("container").path
+        let newCLI = dirNew.appendingPathComponent("container").path
+        FileManager.default.createFile(atPath: oldCLI,
+                                       contents: Data("#!/bin/sh\necho \"container CLI version 1.0.0\"\n".utf8))
+        FileManager.default.createFile(atPath: newCLI,
+                                       contents: Data("#!/bin/sh\necho \"container CLI version 9.9.9\"\n".utf8))
+        Darwin.chmod(oldCLI, 0o755)
+        Darwin.chmod(newCLI, 0o755)
+        let resolved = ContainerCLI.resolveNewest(inDirectories: [dirOld.path, dirNew.path])
+        expect(resolved?.path == newCLI, "a CLI mais nova vence entre candidatos")
+        expect(ContainerCLI.isVersionNewer("1.4.1", than: "1.3.1"), "1.4.1 > 1.3.1")
+        expect(!ContainerCLI.isVersionNewer("1.3.1", than: "1.4.1"), "1.3.1 nao supera 1.4.1")
+        expect(ContainerCLI.isVersionNewer("10.0", than: "9.9.9"), "dois digitos: 10.0 > 9.9.9")
+        expect(!ContainerCLI.isVersionNewer(nil, than: "1.0.0"), "sem versao perde")
+        expect(ContainerCLI.isVersionNewer("1.0.0", than: nil), "com versao vence sem versao")
+        try? FileManager.default.removeItem(atPath: dirOld.path)
+        try? FileManager.default.removeItem(atPath: dirNew.path)
 
         // Version parsing (single and double digit groups).
         expect(ContainerCLI.parseVersion("container CLI version 1.3.1 (build: release)") == "1.3.1", "parse 1.3.1")
