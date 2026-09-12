@@ -39,8 +39,8 @@ trabalho que exija privilegio (por exemplo, rede via vmnet) e resolvido
 pelos proprios binarios Apple, que carregam os entitlements necessarios;
 o app nao os reproduz nem interpoe.
 
-**O que o app executa** (vocabulario fechado, resolvido uma vez no boot
-em `/usr/local/bin/container`, `/opt/homebrew/bin/container` ou PATH):
+**O que o app executa** (vocabulario fechado; o binario e re-localizado a
+cada checagem enquanto nao for encontrado, sem restart):
 
 | Comando | Quando | Watchdog |
 |---|---|---|
@@ -49,6 +49,31 @@ em `/usr/local/bin/container`, `/opt/homebrew/bin/container` ou PATH):
 | `container system start --disable-kernel-install` | so se o start puro falhar/travar | 10s |
 | `container system stop` | acao "Desligar daemon" | 10s |
 | `container --version` | uma vez, para o cabecalho do menu | 2s |
+
+### Onde ele procura a CLI (independente de maquina)
+
+O app nao depende de nenhum caminho desta ou daquela maquina. A cada
+checagem em que a CLI ainda nao foi encontrada, ele re-escaneia, nesta
+ordem, sem repetir diretorios:
+
+1. `/usr/local/bin` - instalador .pkg oficial e `make install` padrao
+2. `/opt/homebrew/bin` e `/opt/homebrew/sbin` - Homebrew (Apple Silicon)
+3. `/usr/local/sbin`, `~/.local/bin`, `/opt/sbin`, `/usr/bin`, `/bin`
+4. todos os diretorios do `PATH` do ambiente de lancamento (builds de
+   codigo-fonte com prefixo customizado entram aqui)
+
+Cobertura por metodo de instalacao: **.pkg do site** (instala em
+`/usr/local/bin`), **brew** (`/opt/homebrew/bin` no Apple Silicon,
+`/usr/local/bin` no Intel) e **build manual** (qualquer prefixo, contanto
+que o binario `container` esteja em um dos diretorios acima ou no PATH do
+usuario). Enquanto a CLI nao existe, o app mostra "Status: Nao instalado"
+com o link do projeto; assim que ela aparece em qualquer um desses
+lugares, o proximo poll (ate 3s) detecta e o menu passa a oferecer
+ligar/desligar - sem reiniciar o app.
+
+O bundle `ContainerStatus.app` em si pode ficar em qualquer pasta
+(`/Applications` e o recomendado, principalmente para o "Abrir no login");
+a descoberta da CLI nao depende de onde o app esta instalado.
 
 **Garantias:**
 

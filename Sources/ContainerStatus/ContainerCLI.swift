@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Thread-safe wrapper around the `container` CLI.
 ///
@@ -14,11 +15,52 @@ final class ContainerCLI: Sendable {
     /// Watchdog for `container system start/stop`.
     private static let mutationTimeout: TimeInterval = 10
 
-    private let binaryPath: String?
+    /// Directories scanned for the CLI, in priority order: the official .pkg
+    /// install root, Homebrew on Apple Silicon and Intel, user-local prefixes
+    /// and system paths, then whatever PATH the launching environment had.
+    /// This is deliberately machine-independent: the app must work whether
+    /// the CLI arrived via .pkg, brew or a source build with a custom prefix.
+    static func searchDirectories() -> [String] {
+        var directories = [
+            "/usr/local/bin",                  // .pkg / `make install` default
+            "/opt/homebrew/bin",               // Homebrew, Apple Silicon
+            "/opt/homebrew/sbin",
+            "/usr/local/sbin",
+            NSHomeDirectory() + "/.local/bin", // pip/cargo-style user prefixes
+            "/opt/sbin",
+            "/usr/bin",
+            "/bin",
+        ]
+        let inherited = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        for item in inherited.split(separator: ":", omittingEmptySubsequences: true) {
+            directories.append(String(item))
+        }
+        var seen = Set<String>()
+        return directories.filter { seen.insert($0).inserted }
+    }
+
+    /// First executable `container` found in the given directories.
+    static func locateBinary(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> String? {
+        for directory in directories {
+            let candidate = URL(fileURLWithPath: directory).appendingPathComponent("container").path
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    /// Resolved CLI path behind a lock so a late install can be picked up
+    /// without restarting the app.
+    private let pathLock: OSAllocatedUnfairLock<String?>
     private let environment: [String: String]
 
+    private var resolvedBinaryPath: String? {
+        pathLock.withLock { $0 }
+    }
+
     init(binaryPath: String? = ContainerCLI.locateBinary()) {
-        self.binaryPath = binaryPath
+        self.pathLock = OSAllocatedUnfairLock(initialState: binaryPath)
         self.environment = [
             "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": NSHomeDirectory(),
@@ -30,7 +72,9 @@ final class ContainerCLI: Sendable {
     /// Polls service status. Returns the state plus an optional detail line
     /// worth surfacing in the menu (only when something is actually wrong).
     func checkStatus() -> (state: ServiceState, detail: String?) {
-        guard let binaryPath, FileManager.default.isExecutableFile(atPath: binaryPath) else {
+        refreshBinaryPathIfNeeded()
+        guard let binaryPath = resolvedBinaryPath,
+              FileManager.default.isExecutableFile(atPath: binaryPath) else {
             return (.notInstalled, "CLI container nao encontrada")
         }
         let result = run(["system", "status"], timeout: Self.statusTimeout)
@@ -76,11 +120,20 @@ final class ContainerCLI: Sendable {
     }
 
     private func run(_ arguments: [String], timeout: TimeInterval) -> CLIRunResult {
-        guard let binaryPath, FileManager.default.isExecutableFile(atPath: binaryPath) else {
+        guard let binaryPath = resolvedBinaryPath,
+              FileManager.default.isExecutableFile(atPath: binaryPath) else {
             return CLIRunResult(stderr: "CLI container nao encontrada")
         }
         return Self.spawn(URL(fileURLWithPath: binaryPath), arguments: arguments,
                           environment: environment, timeout: timeout)
+    }
+
+    /// Re-scans only while the CLI has not been found, so installing it later
+    /// (pkg, brew, source build) takes effect on the next poll without
+    /// relaunching the app. Zero cost once resolved.
+    private func refreshBinaryPathIfNeeded() {
+        guard pathLock.withLock({ $0 == nil }) else { return }
+        pathLock.withLock { $0 = Self.locateBinary() }
     }
 
     /// Synchronous spawn with a watchdog: waits on the termination handler,
@@ -129,7 +182,9 @@ final class ContainerCLI: Sendable {
     /// CLI version (e.g. "1.4.1") parsed from `container --version`; the two
     /// digit groups of the current release must keep matching as they grow.
     func fetchVersion() -> String? {
-        guard let binaryPath, FileManager.default.isExecutableFile(atPath: binaryPath) else { return nil }
+        refreshBinaryPathIfNeeded()
+        guard let binaryPath = resolvedBinaryPath,
+              FileManager.default.isExecutableFile(atPath: binaryPath) else { return nil }
         let result = run(["--version"], timeout: Self.statusTimeout)
         return Self.parseVersion(result.stdout)
     }
@@ -143,24 +198,5 @@ final class ContainerCLI: Sendable {
 
     static func firstLine(_ text: String) -> String {
         text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init) ?? text
-    }
-
-    // MARK: Path resolution
-
-    /// Resolves the CLI once at startup: known install locations first, then
-    /// a PATH scan, so the app survives the binary moving between prefixes.
-    static func locateBinary() -> String? {
-        let known = ["/usr/local/bin/container", "/opt/homebrew/bin/container"]
-        for candidate in known where FileManager.default.isExecutableFile(atPath: candidate) {
-            return candidate
-        }
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        for directory in path.split(separator: ":", omittingEmptySubsequences: true) {
-            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("container").path
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        return nil
     }
 }
