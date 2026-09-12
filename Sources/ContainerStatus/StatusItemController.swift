@@ -18,6 +18,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var detail: String?
     private var activity: ServiceActivity = .none
     private var cliVersion: String?
+    private var cliVersionPath: String?
     private var pollTimer: DispatchSourceTimer?
 
     // Menu items, kept as references so state changes mutate them in place.
@@ -179,8 +180,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             state = poll.state
             detail = poll.detail
         }
-        if cliVersion == nil, poll.state != .notInstalled {
-            fetchVersionInBackground()
+        // Refresh the header version whenever the resolved CLI changes
+        // (first find, install, upgrade or removal).
+        let currentPath = cli.currentBinaryPath()
+        if currentPath != cliVersionPath {
+            if currentPath != nil {
+                fetchVersionInBackground()
+            } else {
+                cliVersion = nil
+                cliVersionPath = nil
+            }
         }
         apply()
     }
@@ -206,6 +215,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             let version = cli.fetchVersion()
             await MainActor.run { [weak self] in
                 self?.cliVersion = version
+                self?.cliVersionPath = cli.currentBinaryPath()
                 self?.apply()
             }
         }

@@ -71,6 +71,16 @@ com o link do projeto; assim que ela aparece em qualquer um desses
 lugares, o proximo poll (ate 3s) detecta e o menu passa a oferecer
 ligar/desligar - sem reiniciar o app.
 
+Quando existe **mais de uma copia** (por exemplo, .pkg antigo + brew
+novo), o app compara as versoes (`container --version`) e usa sempre a
+mais nova; a comparacao so roda quando o conjunto de copias muda, entao o
+custo por poll e apenas um `stat` por diretorio. Versao do cabecalho
+acompanha o binario em uso: apos um upgrade, o numero muda sozinho em ate
+3s. **Evite manter duas copias para sempre**: os launchd labels sao os
+mesmos (`com.apple.container.*`), entao o ideal ao migrar de metodo e
+parar o servico, remover a copia antiga e iniciar pela nova (uma unica
+instalacao e o estado suportado).
+
 O bundle `ContainerStatus.app` em si pode ficar em qualquer pasta
 (`/Applications` e o recomendado, principalmente para o "Abrir no login");
 a descoberta da CLI nao depende de onde o app esta instalado.
