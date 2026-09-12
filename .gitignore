@@ -2,3 +2,26 @@
 *.app/
 *.icns
 .DS_Store
+
+# AI assistant files and folders (never commit)
+.zcode/
+.zcode*
+.cursor/
+.cursor*
+.codex*
+.claude/
+.claude*
+.aider*
+.agents/
+.agents*
+.windsurf/
+.windsurf*
+.copilot*
+.gemini/
+.gemini*
+continue.json*
+docs/superpowers/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+AI_NOTES.md
