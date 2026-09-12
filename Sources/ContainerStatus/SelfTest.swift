@@ -30,8 +30,21 @@ enum SelfTest {
         expect(ContainerCLI.firstLine("") == "", "firstLine empty")
         expect(ContainerCLI.firstLine("unico") == "unico", "firstLine single")
 
-        // Path resolution.
+        // Path resolution: found on this machine, found in a custom prefix
+        // (source build), and nil when nothing exists.
         expect(ContainerCLI.locateBinary() != nil, "CLI resolvida nesta maquina")
+        let customDirURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cs_scan_\(UUID().uuidString)", isDirectory: true)
+        let customDir = customDirURL.path
+        try? FileManager.default.createDirectory(atPath: customDir, withIntermediateDirectories: true)
+        let fakeCLI = customDirURL.appendingPathComponent("container").path
+        FileManager.default.createFile(atPath: fakeCLI, contents: Data("#!/bin/sh\nexit 0\n".utf8))
+        Darwin.chmod(fakeCLI, 0o755)
+        expect(ContainerCLI.locateBinary(inDirectories: [customDir, "/no/such/dir"]) == fakeCLI,
+               "resolucao acha prefixo customizado")
+        expect(ContainerCLI.locateBinary(inDirectories: ["/no/such/dir"]) == nil,
+               "diretorio sem CLI = nil")
+        try? FileManager.default.removeItem(atPath: customDir)
 
         // Version parsing (single and double digit groups).
         expect(ContainerCLI.parseVersion("container CLI version 1.3.1 (build: release)") == "1.3.1", "parse 1.3.1")
