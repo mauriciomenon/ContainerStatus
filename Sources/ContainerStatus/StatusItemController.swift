@@ -6,22 +6,30 @@ import ServiceManagement
 /// queues and results hop back to the main actor.
 @MainActor
 final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private static let projectURL = URL(string: "https://github.com/apple/container")!
+    private static let projectLinkText = "github.com/apple/container"
+
     private let cli = ContainerCLI()
-    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private let item = NSStatusBar.system.statusItem(withLength: 20)
     private let menu = NSMenu()
     private let pollQueue = DispatchQueue(label: "local.menon.containerstatus.poll", qos: .utility)
 
     private var state: ServiceState = .stopped
     private var detail: String?
     private var activity: ServiceActivity = .none
+    private var cliVersion: String?
     private var pollTimer: DispatchSourceTimer?
 
     // Menu items, kept as references so state changes mutate them in place.
     private let headerItem = NSMenuItem()
-    private let toggleItem = NSMenuItem()
+    private let statusLineItem = NSMenuItem()
+    private let actionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
     private let loginItem = NSMenuItem()
     private let quitItem = NSMenuItem()
+    private let quitRow = NSStackView()
+    private let quitButton = NSButton()
+    private let linkButton = NSButton()
 
     // MARK: Lifecycle
 
@@ -29,11 +37,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         super.init()
         buildMenu()
         item.menu = menu
+        item.button?.image = Self.dotImage(state: state, dimmed: false)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         startPolling()
         refreshNow()
+        fetchVersionInBackground()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -47,14 +57,35 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.delegate = self
 
         headerItem.isEnabled = false
-        toggleItem.target = self
-        toggleItem.action = #selector(toggleService(_:))
+        statusLineItem.isEnabled = false
+        actionItem.target = self
+        actionItem.action = #selector(actionClicked(_:))
         errorItem.isEnabled = false
         loginItem.title = "Abrir no login"
         loginItem.target = self
         loginItem.action = #selector(toggleLogin(_:))
-        quitItem.title = "Sair"
-        quitItem.action = #selector(NSApplication.terminate(_:))
+
+        quitButton.title = "Sair"
+        quitButton.isBordered = false
+        quitButton.font = .menuFont(ofSize: 0)
+        quitButton.target = self
+        quitButton.action = #selector(quitApp)
+
+        linkButton.title = "link"
+        linkButton.isBordered = false
+        linkButton.font = .menuFont(ofSize: 10)
+        linkButton.contentTintColor = .linkColor
+        linkButton.target = self
+        linkButton.action = #selector(openProjectPage)
+
+        quitRow.orientation = .horizontal
+        quitRow.alignment = .centerY
+        quitRow.spacing = 8
+        quitRow.edgeInsets = NSEdgeInsets(top: 3, left: 14, bottom: 3, right: 12)
+        quitRow.addView(quitButton, in: .leading)
+        quitRow.addView(linkButton, in: .trailing)
+        quitRow.setFrameSize(NSSize(width: 240, height: 24))
+        quitItem.view = quitRow
 
         rebuildMenu()
     }
@@ -62,7 +93,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private func rebuildMenu() {
         menu.removeAllItems()
         menu.addItem(headerItem)
-        menu.addItem(toggleItem)
+        menu.addItem(statusLineItem)
+        menu.addItem(actionItem)
         if let detail, !detail.isEmpty {
             errorItem.title = detail
             menu.addItem(errorItem)
@@ -76,45 +108,48 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     /// Refreshes menu text and the status icon from the current state.
     private func apply() {
-        let icon = Self.dotImage(state: state, dimmed: activity != .none)
-        item.button?.image = icon
+        item.button?.image = Self.dotImage(state: state, dimmed: activity != .none)
 
-        let busy = activity != .none
-        switch activity {
-        case .starting:
-            item.button?.toolTip = "Apple Container: iniciando..."
-        case .stopping:
-            item.button?.toolTip = "Apple Container: parando..."
-        case .none:
-            switch state {
-            case .running: item.button?.toolTip = "Apple Container: ligado"
-            case .stopped: item.button?.toolTip = "Apple Container: desligado"
-            case .notInstalled: item.button?.toolTip = "Apple Container: CLI indisponivel"
-            }
+        let versionSuffix = cliVersion.map { " \($0)" } ?? ""
+        switch state {
+        case .running: item.button?.toolTip = "Apple Container\(versionSuffix): ligado"
+        case .stopped: item.button?.toolTip = "Apple Container\(versionSuffix): desligado"
+        case .notInstalled: item.button?.toolTip = "Apple Container: CLI indisponivel"
         }
 
-        if busy {
-            headerItem.title = "Apple Container - alternando..."
-            toggleItem.title = "Alternando..."
-            toggleItem.state = .off
-            toggleItem.isEnabled = false
+        switch activity {
+        case .starting:
+            item.button?.toolTip = "Apple Container\(versionSuffix): iniciando..."
+        case .stopping:
+            item.button?.toolTip = "Apple Container\(versionSuffix): parando..."
+        case .none:
+            break
+        }
+
+        headerItem.title = "Apple Container\(versionSuffix)"
+
+        if activity != .none {
+            statusLineItem.title = state == .running ? "Status: Ligado" : "Status: Desligado"
+            actionItem.title = "Alternando..."
+            actionItem.isEnabled = false
+            actionItem.state = .off
         } else {
             switch state {
             case .running:
-                headerItem.title = "Apple Container - ligado"
-                toggleItem.title = "Servico ligado"
-                toggleItem.state = .on
-                toggleItem.isEnabled = true
+                statusLineItem.title = "Status: Ligado"
+                actionItem.title = "Desligar daemon"
+                actionItem.isEnabled = true
+                actionItem.state = .off
             case .stopped:
-                headerItem.title = "Apple Container - desligado"
-                toggleItem.title = "Servico desligado"
-                toggleItem.state = .off
-                toggleItem.isEnabled = true
+                statusLineItem.title = "Status: Desligado"
+                actionItem.title = "Ligar daemon"
+                actionItem.isEnabled = true
+                actionItem.state = .off
             case .notInstalled:
-                headerItem.title = "Apple Container - indisponivel"
-                toggleItem.title = "Servico indisponivel"
-                toggleItem.state = .off
-                toggleItem.isEnabled = false
+                statusLineItem.title = "Status: Não instalado"
+                actionItem.title = Self.projectLinkText
+                actionItem.isEnabled = true
+                actionItem.state = .off
             }
         }
 
@@ -140,9 +175,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Applies a poll result. Polls never overwrite a toggle in flight;
     /// only the toggle completion advances out of the transitioning state.
     private func absorb(poll: (state: ServiceState, detail: String?)) {
-        guard activity == .none else { return }
-        state = poll.state
-        detail = poll.detail
+        if activity == .none {
+            state = poll.state
+            detail = poll.detail
+        }
+        if cliVersion == nil, poll.state != .notInstalled {
+            fetchVersionInBackground()
+        }
         apply()
     }
 
@@ -161,9 +200,25 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if activity == .none { apply() }
     }
 
-    // MARK: Toggle
+    private func fetchVersionInBackground() {
+        let cli = self.cli
+        Task.detached(priority: .utility) {
+            let version = cli.fetchVersion()
+            await MainActor.run { [weak self] in
+                self?.cliVersion = version
+                self?.apply()
+            }
+        }
+    }
 
-    @objc private func toggleService(_ sender: NSMenuItem) {
+    // MARK: Actions
+
+    @objc private func actionClicked(_ sender: NSMenuItem) {
+        // In the not-installed state the action row is a link to the project.
+        if state == .notInstalled {
+            openProjectPage()
+            return
+        }
         guard activity == .none else { return }
         let turningOff = (state == .running)
         activity = turningOff ? .stopping : .starting
@@ -208,15 +263,27 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         apply()
     }
 
+    @objc private func openProjectPage() {
+        menu.cancelTracking()
+        NSWorkspace.shared.open(Self.projectURL)
+    }
+
+    @objc private func quitApp() {
+        menu.cancelTracking()
+        NSApp.terminate(nil)
+    }
+
     // MARK: Icon
 
     /// Draws the status dot: filled green/red, hollow gray when the CLI is
-    /// unavailable, dimmed while a toggle is in flight.
+    /// unavailable, dimmed while a toggle is in flight. The image is compact
+    /// (16 px) inside a narrow status item so it takes little menu bar width,
+    /// while the dot itself stays large and readable.
     private static func dotImage(state: ServiceState, dimmed: Bool) -> NSImage {
-        let side: CGFloat = 18
+        let side: CGFloat = 16
         let alpha: CGFloat = dimmed ? 0.45 : 1.0
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 6, dy: 6))
+            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 3.5, dy: 3.5))
             switch state {
             case .running:
                 NSColor.systemGreen.withAlphaComponent(alpha).setFill()

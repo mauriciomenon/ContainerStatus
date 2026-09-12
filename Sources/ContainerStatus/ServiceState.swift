@@ -33,6 +33,7 @@ struct CLIRunResult: Sendable {
     /// True when the process was actually launched (as opposed to spawn failure).
     var spawned: Bool = false
     var stderr: String = ""
+    var stdout: String = ""
 
     var succeeded: Bool { spawned && !timedOut && exitCode == 0 }
 }

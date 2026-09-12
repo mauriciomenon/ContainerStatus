@@ -33,6 +33,12 @@ enum SelfTest {
         // Path resolution.
         expect(ContainerCLI.locateBinary() != nil, "CLI resolvida nesta maquina")
 
+        // Version parsing (single and double digit groups).
+        expect(ContainerCLI.parseVersion("container CLI version 1.3.1 (build: release)") == "1.3.1", "parse 1.3.1")
+        expect(ContainerCLI.parseVersion("container CLI version 1.4.1 (build: release)") == "1.4.1", "parse 1.4.1")
+        expect(ContainerCLI.parseVersion("container CLI version 10.22.33") == "10.22.33", "parse dois digitos")
+        expect(ContainerCLI.parseVersion("sem versao aqui") == nil, "parse de texto sem versao")
+
         // Spawn plumbing against foreign binaries: exit codes, success flag
         // and the watchdog killing a process that exceeds its budget.
         expect(ContainerCLI.runBinary("/usr/bin/true", arguments: [], timeout: 2).succeeded, "/usr/bin/true = sucesso")
