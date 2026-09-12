@@ -7,8 +7,13 @@ controla o servico Apple `container` (github.com/apple/container).
 
 - Ponto **verde** na menu bar: servico ligado. **Vermelho**: desligado.
 - **Cinza vazado**: CLI `container` indisponivel (nao instalada ou travada).
-- Clique abre um menu com a chave liga/desliga do servico, indicador de
-  "Abrir no login" (SMAppService, sem permissoes extras) e "Sair".
+- Clique abre o menu:
+  - `Apple Container x.y.z` (versao da CLI)
+  - `Status: Ligado` / `Status: Desligado` / `Status: Não instalado`
+  - `Ligar daemon` / `Desligar daemon`; sem a CLI, vira o link
+    `github.com/apple/container`
+  - `Abrir no login` (SMAppService, sem permissoes extras)
+  - `Sair` com um `link` discreto para o projeto no canto oposto
 - Deteccao por polling da CLI oficial `container system status` (codigo de
   saida) a cada 3s, com watchdog de 2s. Start/stop tem watchdog de 10s e o
   app nunca bloqueia a main thread.

@@ -91,9 +91,10 @@ final class ContainerCLI: Sendable {
         process.executableURL = executable
         process.arguments = arguments
         process.environment = environment
-        process.standardOutput = Pipe()
         process.standardInput = FileHandle.nullDevice
+        let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
         let semaphore = DispatchSemaphore(value: 0)
@@ -116,10 +117,28 @@ final class ContainerCLI: Sendable {
         } else {
             let stderrText = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
                                     encoding: .utf8) ?? ""
+            let stdoutText = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+                                    encoding: .utf8) ?? ""
             result = CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
-                                  stderr: stderrText.trimmingCharacters(in: .whitespacesAndNewlines))
+                                  stderr: stderrText.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  stdout: stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return result
+    }
+
+    /// CLI version (e.g. "1.4.1") parsed from `container --version`; the two
+    /// digit groups of the current release must keep matching as they grow.
+    func fetchVersion() -> String? {
+        guard let binaryPath, FileManager.default.isExecutableFile(atPath: binaryPath) else { return nil }
+        let result = run(["--version"], timeout: Self.statusTimeout)
+        return Self.parseVersion(result.stdout)
+    }
+
+    static func parseVersion(_ text: String) -> String? {
+        guard let range = text.range(of: #"version\s+(\d+(?:\.\d+)+)"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(text[range]).split(separator: " ").last.map(String.init)
     }
 
     static func firstLine(_ text: String) -> String {
