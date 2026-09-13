@@ -21,6 +21,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var cliVersion: String?
     private var cliVersionPath: String?
     private var pathDisplay: String?
+    /// App version shown next to the "Sobre ContainerStatus" item.
+    private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var pollTimer: DispatchSourceTimer?
 
     // Menu items, kept as references so state changes mutate them in place.
@@ -29,6 +31,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let statusLineItem = NSMenuItem()
     private let actionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
+    private let aboutAppleItem = NSMenuItem()
     private let aboutItem = NSMenuItem()
     private let loginItem = NSMenuItem()
     private let quitItem = NSMenuItem()
@@ -63,7 +66,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         actionItem.target = self
         actionItem.action = #selector(actionClicked(_:))
         errorItem.isEnabled = false
-        aboutItem.title = "Sobre ContainerStatus"
+        aboutAppleItem.title = "Sobre Apple Container"
+        aboutAppleItem.target = self
+        aboutAppleItem.action = #selector(openAppleAbout(_:))
         aboutItem.target = self
         aboutItem.action = #selector(showAbout(_:))
         loginItem.title = "Abrir no login"
@@ -92,16 +97,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             pathItem.isEnabled = false
             menu.addItem(pathItem)
         }
+        menu.addItem(.separator())
         menu.addItem(statusLineItem)
         menu.addItem(actionItem)
         if let detail, !detail.isEmpty {
             errorItem.title = detail
             menu.addItem(errorItem)
         }
-        menu.addItem(.separator())
         menu.addItem(loginItem)
-        menu.addItem(aboutItem)
         menu.addItem(.separator())
+        menu.addItem(aboutAppleItem)
+        menu.addItem(aboutItem)
         menu.addItem(quitItem)
         apply()
     }
@@ -127,6 +133,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
 
         headerItem.title = "Apple Container\(versionSuffix)"
+        aboutItem.title = "Sobre ContainerStatus\(appVersion.map { " \($0)" } ?? "")"
 
         if activity != .none {
             statusLineItem.title = state == .running ? "Status: Ligado" : "Status: Desligado"
@@ -276,6 +283,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         apply()
     }
 
+    @objc private func openAppleAbout(_ sender: NSMenuItem) {
+        menu.cancelTracking()
+        NSWorkspace.shared.open(Self.projectURL)
+    }
+
     @objc private func showAbout(_ sender: NSMenuItem) {
         menu.cancelTracking()
         NSApp.activate(ignoringOtherApps: true)
@@ -318,7 +330,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             append("Commit \(commit)\n", font: small, color: .secondaryLabelColor)
         }
         append("Repositorio\n", font: regular, link: repoURL)
-        append("Apple container\n", font: regular, link: projectURL)
         if let buildDate, !buildDate.isEmpty {
             append(buildDate + "\n", font: small, color: .secondaryLabelColor)
         }
