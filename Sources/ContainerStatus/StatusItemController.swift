@@ -8,6 +8,7 @@ import ServiceManagement
 final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let projectURL = URL(string: "https://github.com/apple/container")!
     private static let projectLinkText = "github.com/apple/container"
+    private static let repoURL = URL(string: "https://github.com/mauriciomenon/ContainerStatus")!
 
     private let cli = ContainerCLI()
     private let item = NSStatusBar.system.statusItem(withLength: 20)
@@ -105,8 +106,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             menu.addItem(errorItem)
         }
         menu.addItem(.separator())
-        menu.addItem(aboutItem)
         menu.addItem(loginItem)
+        menu.addItem(aboutItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
         apply()
@@ -284,8 +285,39 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         DispatchQueue.main.async {
             NSApp.orderFrontStandardAboutPanel(options: [
                 .applicationName: "ContainerStatus",
+                .applicationVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.1",
+                .credits: Self.makeCredits(),
             ])
         }
+    }
+
+    /// About panel content, top to bottom: author, base commit, repository
+    /// and project links, license, build date (all baked at package time).
+    private static func makeCredits() -> NSAttributedString {
+        let info = Bundle.main.infoDictionary
+        let commit = info?["GitCommit"] as? String
+        let buildDate = info?["BuildDate"] as? String
+
+        let text = NSMutableAttributedString()
+        func append(_ string: String, font: NSFont, color: NSColor = .labelColor, link: URL? = nil) {
+            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+            if let link { attributes[.link] = link }
+            text.append(NSAttributedString(string: string, attributes: attributes))
+        }
+        let regular = NSFont.systemFont(ofSize: 11)
+        let small = NSFont.systemFont(ofSize: 10)
+
+        append("Mauricio Menon\n", font: NSFont.boldSystemFont(ofSize: 12))
+        if let commit, !commit.isEmpty {
+            append("Commit \(commit)\n", font: small, color: .secondaryLabelColor)
+        }
+        append("Repositorio\n", font: regular, link: repoURL)
+        append("Apple container\n", font: regular, link: projectURL)
+        append("GPL 2.0\n", font: small, color: .secondaryLabelColor)
+        if let buildDate, !buildDate.isEmpty {
+            append(buildDate, font: small, color: .secondaryLabelColor)
+        }
+        return text
     }
 
     @objc private func openProjectPage() {

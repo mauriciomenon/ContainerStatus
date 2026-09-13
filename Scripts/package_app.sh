@@ -79,6 +79,7 @@ if [[ "$MENU_BAR_APP" == "1" ]]; then
 fi
 
 BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+BUILD_DATE=$(date -u +"%Y-%m-%d")
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -92,12 +93,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>${APP_NAME}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${MARKETING_VERSION}</string>
-    <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+    <key>CFBundleVersion</key><string>${MARKETING_VERSION}</string>
     <key>LSMinimumSystemVersion</key><string>${MACOS_MIN_VERSION}</string>
     <key>LSUIElement</key><${LSUI_VALUE}/>
-    <key>NSHumanReadableCopyright</key><string>Copyright (c) 2026 Mauricio Menon. Licenciado sob GPL-2.0.</string>
     <key>CFBundleIconFile</key><string>Icon</string>
     <key>BuildTimestamp</key><string>${BUILD_TIMESTAMP}</string>
+    <key>BuildDate</key><string>${BUILD_DATE}</string>
     <key>GitCommit</key><string>${GIT_COMMIT}</string>
 </dict>
 </plist>
