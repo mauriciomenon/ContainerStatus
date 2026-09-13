@@ -15,8 +15,9 @@ controla o servico Apple `container` (github.com/apple/container).
   - `Abrir no login` (SMAppService, sem permissoes extras)
   - `Sair` com um `link` discreto para o projeto no canto oposto
 - Deteccao por polling da CLI oficial `container system status` (codigo de
-  saida) a cada 3s, com watchdog de 2s. Start/stop tem watchdog de 10s e o
-  app nunca bloqueia a main thread.
+  saida) a cada 3s, com watchdog de 2s. Start tem watchdog de 10s e stop de
+  40s, permitindo a parada dos containers antes de remover o servico.
+  O app nunca bloqueia a main thread.
 - Durante o toggle o dot fica esmaecido e o poll nao sobrescreve o estado
   (sem piscar vermelho no meio da transicao).
 
@@ -47,8 +48,8 @@ cada checagem enquanto nao for encontrado, sem restart):
 | `container system status` | poll a cada 3s e ao abrir o menu | 2s |
 | `container system start` | acao "Ligar daemon" | 10s |
 | `container system start --disable-kernel-install` | so se o start puro falhar/travar | 10s |
-| `container system stop` | acao "Desligar daemon" | 10s |
-| `container --version` | uma vez, para o cabecalho do menu | 2s |
+| `container system stop` | acao "Desligar daemon" | 40s |
+| `container --version` | descoberta ou alteracao de uma instalacao | 2s |
 
 ### Onde ele procura a CLI (independente de maquina)
 
@@ -73,10 +74,11 @@ ligar/desligar - sem reiniciar o app.
 
 Quando existe **mais de uma copia** (por exemplo, .pkg antigo + brew
 novo), o app compara as versoes (`container --version`) e usa sempre a
-mais nova; a comparacao so roda quando o conjunto de copias muda, entao o
-custo por poll e apenas um `stat` por diretorio. Versao do cabecalho
-acompanha o binario em uso: apos um upgrade, o numero muda sozinho em ate
-3s. **Evite manter duas copias para sempre**: os launchd labels sao os
+mais nova; a comparacao so roda quando as copias ou seus metadados mudam.
+Cada poll verifica caminhos e metadados, incluindo o destino de symlinks;
+nao executa consultas de versao se nada mudou. Versao do cabecalho
+acompanha o binario em uso, inclusive em upgrades no mesmo caminho, a
+partir do proximo poll. **Evite manter duas copias para sempre**: os launchd labels sao os
 mesmos (`com.apple.container.*`), entao o ideal ao migrar de metodo e
 parar o servico, remover a copia antiga e iniciar pela nova (uma unica
 instalacao e o estado suportado).
@@ -116,13 +118,19 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 
 ```bash
 swift build                              # build de desenvolvimento
-.build/debug/ContainerStatus --selftest  # self-test do nucleo (13 checagens)
+.build/debug/ContainerStatus --selftest  # autoteste do nucleo e regressoes
 Scripts/compile_and_run.sh               # empacota ContainerStatus.app e abre
+Scripts/compile_and_run.sh --test        # valida antes de empacotar e abrir
+Scripts/make_icon.sh                     # regenera Icon.icns de 16 a 1024 pixels
 ```
 
 O script `Scripts/package_app.sh` monta o bundle `.app` (Info.plist com
 `LSUIElement=true`, sem icone de Dock) e assina ad-hoc. Para abrir no login,
 use o proprio menu do app.
+
+O icone preserva as representacoes padrao do macOS, incluindo 512x512
+pontos em escala 2x (1024x1024 pixels). A geracao usa dimensoes explicitas
+de bitmap e independe da escala da tela.
 
 ## Estrutura
 

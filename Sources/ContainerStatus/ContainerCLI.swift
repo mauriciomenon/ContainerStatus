@@ -12,8 +12,10 @@ import os
 final class ContainerCLI: Sendable {
     /// Watchdog for `container system status`.
     private static let statusTimeout: TimeInterval = 2
-    /// Watchdog for `container system start/stop`.
+    /// Prazo de `container system start`.
     private static let mutationTimeout: TimeInterval = 10
+    /// Cobre os 5s + 20s de espera da CLI e a comunicacao com o servico.
+    private static let stopTimeout: TimeInterval = 40
 
     /// Directories scanned for the CLI, in priority order: the official .pkg
     /// install root, Homebrew on Apple Silicon and Intel, user-local prefixes
@@ -68,11 +70,28 @@ final class ContainerCLI: Sendable {
         return false
     }
 
-    /// A resolved CLI plus the candidate set it was chosen from, so the
-    /// instance can detect installs/uninstalls cheaply (stat-only).
+    /// Caminho e versao obtidos na mesma consulta.
     struct ResolvedCLI: Sendable, Equatable {
         var path: String
-        var candidates: Set<String>
+        var version: String?
+    }
+
+    private struct CandidateSignature: Sendable, Equatable {
+        var path: String
+        var destination: String
+        var device: dev_t
+        var inode: ino_t
+        var size: off_t
+        var modifiedSeconds: Int
+        var modifiedNanoseconds: Int
+        var changedSeconds: Int
+        var changedNanoseconds: Int
+    }
+
+    private struct ResolutionState: Sendable {
+        var resolved: ResolvedCLI?
+        var signatures: [CandidateSignature]?
+        var revision: UInt64 = 0
     }
 
     /// Picks the newest candidate by version; ties keep the priority order of
@@ -87,7 +106,7 @@ final class ContainerCLI: Sendable {
                 bestVersion = version
             }
         }
-        return ResolvedCLI(path: best, candidates: Set(candidates))
+        return ResolvedCLI(path: best, version: bestVersion)
     }
 
     static func resolveNewest(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> ResolvedCLI? {
@@ -97,6 +116,8 @@ final class ContainerCLI: Sendable {
     /// Currently resolved CLI path (lets the controller notice upgrades and
     /// refresh the displayed version).
     func currentBinaryPath() -> String? { resolvedBinaryPath }
+
+    func currentVersion() -> String? { pathLock.withLock { $0.resolved?.version } }
 
     /// Human-readable install info: "<path>", or, when the candidate is a
     /// symlink, "<final resolved path> via <symlink>" — tells a brew install
@@ -109,17 +130,19 @@ final class ContainerCLI: Sendable {
 
     /// Resolved CLI path behind a lock so installs, upgrades and removals are
     /// picked up without restarting the app.
-    private let pathLock: OSAllocatedUnfairLock<ResolvedCLI?>
+    private let pathLock: OSAllocatedUnfairLock<ResolutionState>
+    private let directories: [String]
     private let environment: [String: String]
 
     private var resolvedBinaryPath: String? {
-        pathLock.withLock { $0?.path }
+        pathLock.withLock { $0.resolved?.path }
     }
 
-    init(binaryPath: String? = nil) {
-        self.pathLock = OSAllocatedUnfairLock(initialState: binaryPath.map {
-            ResolvedCLI(path: $0, candidates: [])
-        })
+    init(binaryPath: String? = nil, directories: [String] = ContainerCLI.searchDirectories()) {
+        self.pathLock = OSAllocatedUnfairLock(initialState: ResolutionState(resolved: binaryPath.map {
+            ResolvedCLI(path: $0, version: nil)
+        }))
+        self.directories = directories
         self.environment = [
             "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": NSHomeDirectory(),
@@ -164,7 +187,7 @@ final class ContainerCLI: Sendable {
     /// Stops the whole service stack (apiserver, machine-apiserver,
     /// core-images, vmnet).
     func stop() -> CLIRunResult {
-        run(["system", "stop"], timeout: Self.mutationTimeout)
+        run(["system", "stop"], timeout: Self.stopTimeout)
     }
 
     // MARK: Process plumbing
@@ -187,15 +210,38 @@ final class ContainerCLI: Sendable {
                           environment: environment, timeout: timeout)
     }
 
-    /// Cheap scan on every poll: stat-only while the candidate set is
-    /// unchanged; version probes only when an install/uninstall/upgrade
-    /// changed the set, so the newest CLI wins without restarts.
+    private func candidateSignatures() -> [CandidateSignature] {
+        Self.existingCandidates(inDirectories: directories).compactMap { path in
+            let destination = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+            var metadata = stat()
+            guard stat(destination, &metadata) == 0 else {
+                if errno != ENOENT && errno != ENOTDIR {
+                    NSLog("Falha ao consultar CLI %@: %s", path, strerror(errno))
+                }
+                return nil
+            }
+            return CandidateSignature(path: path, destination: destination,
+                                      device: metadata.st_dev, inode: metadata.st_ino, size: metadata.st_size,
+                                      modifiedSeconds: metadata.st_mtimespec.tv_sec,
+                                      modifiedNanoseconds: metadata.st_mtimespec.tv_nsec,
+                                      changedSeconds: metadata.st_ctimespec.tv_sec,
+                                      changedNanoseconds: metadata.st_ctimespec.tv_nsec)
+        }
+    }
+
+    /// Consulta metadados a cada poll; executa --version somente apos mudancas.
     private func refreshBinaryPathIfNeeded() {
-        let existing = Self.existingCandidates()
         let current = pathLock.withLock { $0 }
-        if let current, current.candidates == Set(existing) { return }
-        let resolved = Self.resolveNewest(existingCandidates: existing)
-        pathLock.withLock { $0 = resolved }
+        let signatures = candidateSignatures()
+        if current.signatures == signatures { return }
+        let resolved = Self.resolveNewest(existingCandidates: signatures.map(\.path))
+        guard candidateSignatures() == signatures else { return }
+        pathLock.withLock { state in
+            guard state.revision == current.revision else { return }
+            state.resolved = resolved
+            state.signatures = signatures
+            state.revision += 1
+        }
     }
 
     /// Synchronous spawn with a watchdog: waits on the termination handler,
@@ -239,16 +285,6 @@ final class ContainerCLI: Sendable {
                                   stdout: stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return result
-    }
-
-    /// CLI version (e.g. "1.4.1") parsed from `container --version`; the two
-    /// digit groups of the current release must keep matching as they grow.
-    func fetchVersion() -> String? {
-        refreshBinaryPathIfNeeded()
-        guard let binaryPath = resolvedBinaryPath,
-              FileManager.default.isExecutableFile(atPath: binaryPath) else { return nil }
-        let result = run(["--version"], timeout: Self.statusTimeout)
-        return Self.parseVersion(result.stdout)
     }
 
     static func parseVersion(_ text: String) -> String? {
