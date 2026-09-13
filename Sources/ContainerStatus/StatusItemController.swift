@@ -243,6 +243,41 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         apply()
     }
 
+    // Regressao opcional de AppKit, sem iniciar polling ou executar a CLI real.
+    static func checkMenuErrors(expect: (Bool, String) -> Void) {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let controller = StatusItemController(cli: ContainerCLI(directories: []))
+        controller.item.isVisible = false
+        defer { NSStatusBar.system.removeStatusItem(controller.item) }
+
+        let initialCount = controller.menu.numberOfItems
+        expect(controller.errorItem.menu == nil, "menu inicia sem linha de erro")
+
+        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true,
+                                              stderr: "Falha ao iniciar\nDetalhe adicional"),
+                          poll: (.stopped, nil))
+        expect(controller.errorItem.title == "Falha ao iniciar"
+               && controller.menu.index(of: controller.errorItem) == controller.menu.index(of: controller.loginItem) - 1,
+               "falha insere primeira linha do erro antes do login")
+
+        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Falha ao parar"),
+                          poll: (.running, nil))
+        expect(controller.errorItem.title == "Falha ao parar" && controller.menu.numberOfItems == initialCount + 1,
+               "nova falha atualiza erro sem duplicar item")
+
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true), poll: (.running, nil))
+        expect(controller.errorItem.menu == nil && controller.menu.numberOfItems == initialCount,
+               "operacao bem-sucedida remove erro anterior")
+
+        controller.absorb(poll: (.notInstalled, "CLI indisponivel"))
+        expect(controller.errorItem.title == "CLI indisponivel" && controller.errorItem.menu === controller.menu,
+               "polling com falha exibe erro")
+
+        controller.absorb(poll: (.running, nil))
+        expect(controller.errorItem.menu == nil && controller.menu.numberOfItems == initialCount,
+               "recuperacao no polling remove erro")
+    }
+
     // MARK: Launch at login
 
     private static var loginServiceEnabled: Bool {

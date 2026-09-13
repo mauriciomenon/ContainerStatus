@@ -3,9 +3,11 @@ import Foundation
 
 @main
 struct AppMain {
+    @MainActor
     static func main() {
-        if CommandLine.arguments.contains("--selftest") {
-            SelfTest.runAndExit()
+        let includeUI = CommandLine.arguments.contains("--selftest-ui")
+        if includeUI || CommandLine.arguments.contains("--selftest") {
+            SelfTest.runAndExit(includeUI: includeUI)
         }
         MainActor.assumeIsolated {
             let app = NSApplication.shared

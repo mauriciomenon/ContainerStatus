@@ -5,7 +5,8 @@ import Foundation
 /// the unit test target, which the Command Line Tools toolchain cannot build
 /// with cross-module imports.
 enum SelfTest {
-    static func runAndExit() -> Never {
+    @MainActor
+    static func runAndExit(includeUI: Bool = false) -> Never {
         var failures = 0
 
         func expect(_ condition: Bool, _ label: String) {
@@ -70,6 +71,10 @@ enum SelfTest {
         expect(ContainerCLI.runBinary("/usr/bin/false", arguments: [], timeout: 2).exitCode == 1, "/usr/bin/false = exit 1")
         let hung = ContainerCLI.runBinary("/bin/sleep", arguments: ["5"], timeout: 0.3)
         expect(hung.timedOut && !hung.succeeded, "watchdog mata processo estourado")
+
+        if includeUI {
+            StatusItemController.checkMenuErrors(expect: expect)
+        }
 
         if failures == 0 {
             print("SELFTEST OK")
