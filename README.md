@@ -9,7 +9,7 @@ controla o servico Apple `container` (github.com/apple/container).
 - **Cinza vazado**: CLI `container` indisponivel (nao instalada ou travada).
 - Clique abre o menu:
   - `Apple Container x.y.z` (versao da CLI)
-  - `Status: Ligado` / `Status: Desligado` / `Status: Não instalado`
+  - `Status: Ligado` / `Status: Desligado` / `Status: Nao instalado`
   - `Ligar daemon` / `Desligar daemon`; sem a CLI, vira o link
     `github.com/apple/container`
   - `Abrir no login` (SMAppService, sem permissoes extras)
@@ -92,7 +92,7 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 - Nenhum comando passa por shell: os argumentos sao passados direto pela
   API `Process`, sem interpolacao (nao existe superficie de injecao).
 - Ambiente minimo e fixo (`PATH` e `HOME`); o app nao herda o ambiente de
-  quem o lancou, então o comportamento e o mesmo no Terminal, no Finder e
+  quem o lancou, entao o comportamento e o mesmo no Terminal, no Finder e
   no login.
 - O watchdog mata somente o processo filho (a CLI), nunca o daemon. Se a
   CLI travar, o servico continua sob o launchd e o app marca "indisponivel"
@@ -110,7 +110,7 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 ## Requisitos
 
 - macOS 13+ (testado no 27.0, Apple Silicon)
-- Swift 6 via Command Line Tools (nao precisa de Xcode)
+- Swift 6.2+ via Command Line Tools (nao precisa de Xcode)
 - CLI `container` instalada (procurada em `/usr/local/bin/container`,
   `/opt/homebrew/bin/container` e PATH)
 
@@ -119,35 +119,113 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 ```bash
 swift build                              # build de desenvolvimento
 .build/debug/ContainerStatus --selftest  # autoteste do nucleo e regressoes
+.build/debug/ContainerStatus --selftest-ui # inclui os testes de menu AppKit
 Scripts/compile_and_run.sh               # empacota ContainerStatus.app e abre
 Scripts/compile_and_run.sh --test        # valida antes de empacotar e abrir
 Scripts/make_icon.sh                     # regenera Icon.icns de 16 a 1024 pixels
+Scripts/validate_assets.sh               # confere tamanhos e transparencia do ICNS
+Scripts/validate_assets.sh ContainerStatus.app # confere tambem bundle e assinatura
 ```
 
 O script `Scripts/package_app.sh` monta o bundle `.app` (Info.plist com
 `LSUIElement=true`, sem icone de Dock) e assina ad-hoc. Para abrir no login,
 use o proprio menu do app.
 
-O icone preserva as representacoes padrao do macOS, incluindo 512x512
-pontos em escala 2x (1024x1024 pixels). A geracao usa dimensoes explicitas
-de bitmap e independe da escala da tela.
+O ICNS contem todas as 10 representacoes do
+[conjunto padrao da Apple](https://developer.apple.com/library/archive/documentation/Xcode/Reference/xcode_ref-Asset_Catalog_Format/IconSetType.html).
+A maior e 1024x1024 pixels (512 pontos em escala 2x). A geracao usa
+dimensoes explicitas de bitmap e independe da escala da tela.
+
+| Tamanho em pontos | Pixels 1x | Pixels 2x |
+|---|---|---|
+| 16 | 16x16 | 32x32 |
+| 32 | 32x32 | 64x64 |
+| 128 | 128x128 | 256x256 |
+| 256 | 256x256 | 512x512 |
+| 512 | 512x512 | 1024x1024 |
+
+## Testes focados
+
+`--selftest` executa 38 checagens do nucleo: estados, watchdog, parada
+lenta, descoberta da CLI, cache e concorrencia durante upgrades.
+`--selftest-ui` inclui mais 6 checagens de insercao, atualizacao e remocao
+da linha de erro do menu, inclusive apos recuperacao do polling. Exige uma
+sessao grafica do macOS; nao abre o menu nem altera o daemon ou o login.
+Os dois modos encerram o processo com codigo diferente de zero se falharem.
+
+`validate_assets.sh` verifica as 10 imagens internas do ICNS, dimensoes,
+canal alfa, cantos transparentes e centro opaco. Com um bundle, tambem
+verifica nome do produto, macOS minimo, modo menu bar, ausencia intencional
+de `CFBundleVersion`, icone copiado e assinatura de todas as arquiteturas.
+
+## CI e entrega de builds
+
+A [CI principal](https://github.com/mauriciomenon/ContainerStatus/actions/workflows/ci.yml)
+roda em pushes para `master`, pull requests e por acionamento manual.
+Usa runners nativos `macos-15` (ARM64) e `macos-15-intel` (x86_64), com
+Xcode 26.2 / Swift 6.2. Cada um compila, executa `--selftest-ui`, regenera
+o icone e valida o bundle. ShellCheck, actionlint e Gitleaks rodam uma vez.
+Veja os [runners oficiais](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+
+Em `master`, cada arquitetura disponibiliza um ZIP do app validado por
+7 dias na pagina da execucao. A assinatura e ad-hoc; estes artefatos nao
+sao releases notarizados. Pull requests apenas validam. O workflow tem
+permissao de leitura, actions fixadas por SHA, sem cache compartilhado e
+sem senhas, PATs ou variaveis de credenciais configuradas. Checkout e
+upload usam somente a autenticacao temporaria gerenciada pelo GitHub.
+
+Os remotes `schottge` e `gitlab` permanecem espelhos da CI principal,
+evitando execucoes duplicadas. Nao ha pipeline macOS do GitLab pendente
+de runner: os [runners macOS hospedados](https://docs.gitlab.com/ci/runners/hosted_runners/macos/)
+exigem elegibilidade especifica e nao cobrem Intel.
+
+## Validacao visual e acessos externos
+
+- **Menu:** os testes AppKit verificam o comportamento, mas nao substituem
+  a inspecao visual. Se a ferramenta de captura expirar, registre o timeout
+  como falha de captura. Para validar manualmente, abra o menu e use
+  `Cmd+Shift+4` para selecionar sua area; confira alinhamento, texto e escala
+  da tela. O timeout sozinho nao comprova falta de permissao do macOS.
+- **Intel:** compilacao universal so prova a presenca das duas arquiteturas.
+  A execucao nativa e comprovada pelo job `macos-15-intel` concluido com
+  sucesso para o mesmo commit. Os testes usam uma CLI simulada; nao validam
+  virtualizacao ou containers reais em Intel.
+- **GitLab:** push via SSH nao autentica a API de statuses externos.
+  Para consulta local, use uma versao atual do `glab`, com suporte a
+  `--device` e armazenamento no Chaves do macOS, e autorize sua conta:
+
+  ```bash
+  glab auth login --hostname gitlab.com --device --git-protocol ssh
+  glab auth status --hostname gitlab.com
+  glab api --hostname gitlab.com 'projects/mauricio.menon%2Fcontainerstatus/repository/commits/master/statuses'
+  ```
+
+  Faca isso no Terminal local com o Chaves disponivel e desbloqueado,
+  nunca na CI ou com `--insecure-storage`. Se o `glab` indicar armazenamento
+  em texto puro, interrompa e resolva o acesso ao Chaves antes de continuar.
+  Nao copie tokens para arquivos, comandos ou variaveis. A
+  [documentacao de autenticacao](https://docs.gitlab.com/cli/auth/login/)
+  explica o fluxo. Sem essa autorizacao, a consulta fica **nao verificada**;
+  isso nao bloqueia a CI principal no GitHub.
+- **Arquivos internos:** `.gitignore` inclui `docs/` e `agents.md` para
+  manter documentacao interna fora dos commits. Antes de publicar, confira
+  `git status --short` e `git diff --cached --name-only`.
 
 ## Estrutura
 
 ```
 Sources/ContainerStatus/
-  AppMain.swift              bootstrap NSApplication (accessory) + --selftest
+  AppMain.swift              bootstrap NSApplication (accessory) e autotestes
   ServiceState.swift         enum de estado + mapeamento de codigo de saida
   ContainerCLI.swift         wrapper da CLI com watchdog e ambiente explicito
-  SelfTest.swift             checagens do nucleo (roda com --selftest)
+  SelfTest.swift             checagens do nucleo e entrada dos testes de menu
   StatusItemController.swift NSStatusItem, menu, maquina de estados, polling
-Scripts/                     empacotamento .app sem Xcode
-docs/superpowers/specs/      documento de design (council validado)
+Scripts/                     icone, validacao e empacotamento .app sem Xcode
+.github/workflows/ci.yml     validacao ARM64/Intel e artefatos de master
 ```
 
 ## Design
 
-A decisao de arquitetura (AppKit puro, CLI como fonte de verdade, timeouts,
-maquina de estados, estado "indisponivel" distinto) foi validada por um
-council de quatro vozes; detalhes em
-`docs/superpowers/specs/2026-09-12-container-status-macos-app-design.md`.
+AppKit puro, CLI como fonte de verdade e uma maquina de estados pequena.
+Timeouts limitam subprocessos; o estado "indisponivel" distingue falhas da
+CLI de um servico parado.

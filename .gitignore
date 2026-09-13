@@ -28,3 +28,7 @@ AI_NOTES.md
 build/
 *.dmg
 !Icon.icns
+
+# Documentacao interna do projeto (nao publicar)
+docs/
+agents.md
