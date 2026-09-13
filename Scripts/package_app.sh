@@ -5,10 +5,10 @@ CONF=${1:-release}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
-APP_NAME=${APP_NAME:-MyApp}
+APP_NAME=${APP_NAME:-ContainerStatus}
 BUNDLE_ID=${BUNDLE_ID:-com.example.myapp}
-MACOS_MIN_VERSION=${MACOS_MIN_VERSION:-14.0}
-MENU_BAR_APP=${MENU_BAR_APP:-0}
+MACOS_MIN_VERSION=${MACOS_MIN_VERSION:-13.0}
+MENU_BAR_APP=${MENU_BAR_APP:-1}
 SIGNING_MODE=${SIGNING_MODE:-}
 APP_IDENTITY=${APP_IDENTITY:-}
 
@@ -45,6 +45,25 @@ read_version_env() {
   }
 }
 
+verify_binary_arches() {
+  local binary="$1"; shift
+  local expected=("$@")
+  local actual
+  actual=$(lipo -archs "$binary")
+  local actual_arches
+  read -r -a actual_arches <<< "$actual"
+  if [[ ${#actual_arches[@]} -ne ${#expected[@]} ]]; then
+    echo "ERROR: $binary arch mismatch (expected: ${expected[*]}, actual: ${actual})" >&2
+    exit 1
+  fi
+  for arch in "${expected[@]}"; do
+    if [[ " $actual " != *" $arch "* ]]; then
+      echo "ERROR: $binary missing arch $arch (have: ${actual})" >&2
+      exit 1
+    fi
+  done
+}
+
 if [[ -f "$ROOT/version.env" ]]; then
   read_version_env "$ROOT/version.env"
 else
@@ -52,15 +71,19 @@ else
   BUILD_NUMBER=${BUILD_NUMBER:-1}
 fi
 
-ARCH_LIST=( ${ARCHES:-} )
+read -r -a ARCH_LIST <<< "${ARCHES:-}"
 if [[ ${#ARCH_LIST[@]} -eq 0 ]]; then
   HOST_ARCH=$(uname -m)
   ARCH_LIST=("$HOST_ARCH")
 fi
 
+BUILD_ARGS=(-c "$CONF" --product "$APP_NAME")
 for ARCH in "${ARCH_LIST[@]}"; do
-  swift build -c "$CONF" --arch "$ARCH"
+  BUILD_ARGS+=(--arch "$ARCH")
 done
+swift build "${BUILD_ARGS[@]}"
+BUILD_DIR="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
+verify_binary_arches "$BUILD_DIR/$APP_NAME" "${ARCH_LIST[@]}"
 
 APP="$ROOT/${APP_NAME}.app"
 rm -rf "$APP"
@@ -103,63 +126,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-build_product_path() {
-  local name="$1"
-  local arch="$2"
-  case "$arch" in
-    arm64|x86_64) echo ".build/${arch}-apple-macosx/$CONF/$name" ;;
-    *) echo ".build/$CONF/$name" ;;
-  esac
-}
-
-verify_binary_arches() {
-  local binary="$1"; shift
-  local expected=("$@")
-  local actual
-  actual=$(lipo -archs "$binary")
-  local actual_count expected_count
-  actual_count=$(wc -w <<<"$actual" | tr -d ' ')
-  expected_count=${#expected[@]}
-  if [[ "$actual_count" -ne "$expected_count" ]]; then
-    echo "ERROR: $binary arch mismatch (expected: ${expected[*]}, actual: ${actual})" >&2
-    exit 1
-  fi
-  for arch in "${expected[@]}"; do
-    if [[ "$actual" != *"$arch"* ]]; then
-      echo "ERROR: $binary missing arch $arch (have: ${actual})" >&2
-      exit 1
-    fi
-  done
-}
-
-install_binary() {
-  local name="$1"
-  local dest="$2"
-  local binaries=()
-  for arch in "${ARCH_LIST[@]}"; do
-    local src
-    src=$(build_product_path "$name" "$arch")
-    if [[ ! -f "$src" ]]; then
-      # Toolchains with a custom scratch path (e.g. .build/out) keep products
-      # outside the arch-suffixed directory; fall back to a search.
-      src=$(find "$ROOT/.build" -type f -ipath "*${CONF}/${name}" 2>/dev/null | head -1)
-    fi
-    if [[ ! -f "$src" ]]; then
-      echo "ERROR: Missing ${name} build for ${arch} at ${src}" >&2
-      exit 1
-    fi
-    binaries+=("$src")
-  done
-  if [[ ${#ARCH_LIST[@]} -gt 1 ]]; then
-    lipo -create "${binaries[@]}" -output "$dest"
-  else
-    cp "${binaries[0]}" "$dest"
-  fi
-  chmod +x "$dest"
-  verify_binary_arches "$dest" "${ARCH_LIST[@]}"
-}
-
-install_binary "$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
+cp "$BUILD_DIR/$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
+chmod +x "$APP/Contents/MacOS/$APP_NAME"
 
 # Bundle app resources (if any).
 APP_RESOURCES_DIR="$ROOT/Sources/$APP_NAME/Resources"
@@ -168,9 +136,8 @@ if [[ -d "$APP_RESOURCES_DIR" ]]; then
 fi
 
 # SwiftPM resource bundles are emitted next to the built binary.
-PREFERRED_BUILD_DIR="$(dirname "$(build_product_path "$APP_NAME" "${ARCH_LIST[0]}")")"
 shopt -s nullglob
-SWIFTPM_BUNDLES=("${PREFERRED_BUILD_DIR}/"*.bundle)
+SWIFTPM_BUNDLES=("${BUILD_DIR}/"*.bundle)
 shopt -u nullglob
 if [[ ${#SWIFTPM_BUNDLES[@]} -gt 0 ]]; then
   for bundle in "${SWIFTPM_BUNDLES[@]}"; do
@@ -179,15 +146,11 @@ if [[ ${#SWIFTPM_BUNDLES[@]} -gt 0 ]]; then
 fi
 
 # Embed frameworks if any exist in the build folder.
-FRAMEWORK_DIRS=(".build/$CONF" ".build/${ARCH_LIST[0]}-apple-macosx/$CONF")
-for dir in "${FRAMEWORK_DIRS[@]}"; do
-  if compgen -G "${dir}/*.framework" >/dev/null; then
-    cp -R "${dir}/"*.framework "$APP/Contents/Frameworks/"
-    chmod -R a+rX "$APP/Contents/Frameworks"
-    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/$APP_NAME"
-    break
-  fi
-done
+if compgen -G "${BUILD_DIR}/*.framework" >/dev/null; then
+  cp -R "${BUILD_DIR}/"*.framework "$APP/Contents/Frameworks/"
+  chmod -R a+rX "$APP/Contents/Frameworks"
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/$APP_NAME"
+fi
 
 if [[ -f "$ICON_TARGET" ]]; then
   cp "$ICON_TARGET" "$APP/Contents/Resources/Icon.icns"

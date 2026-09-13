@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Kill running instances, package, relaunch, verify.
+# Valida, empacota, reabre e verifica.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME=${APP_NAME:-MyApp}
+cd "$ROOT_DIR"
+APP_NAME=${APP_NAME:-ContainerStatus}
 APP_BUNDLE="${ROOT_DIR}/${APP_NAME}.app"
 APP_PROCESS_PATTERN="${APP_NAME}.app/Contents/MacOS/${APP_NAME}"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/.build/debug/${APP_NAME}"
@@ -26,16 +27,18 @@ for arg in "$@"; do
   esac
 done
 
+if [[ "${RUN_TESTS}" == "1" ]]; then
+  log "==> self-test"
+  swift build -c debug --product "$APP_NAME"
+  TEST_BIN_DIR="$(swift build -c debug --show-bin-path)"
+  "$TEST_BIN_DIR/$APP_NAME" --selftest
+fi
+
 log "==> Killing existing ${APP_NAME} instances"
 pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
 pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
 pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
 pkill -x "${APP_NAME}" 2>/dev/null || true
-
-if [[ "${RUN_TESTS}" == "1" ]]; then
-  log "==> swift test"
-  swift test -q
-fi
 
 HOST_ARCH="$(uname -m)"
 ARCHES_VALUE="${HOST_ARCH}"
