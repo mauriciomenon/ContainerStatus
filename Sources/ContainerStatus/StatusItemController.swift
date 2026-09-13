@@ -26,6 +26,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let statusLineItem = NSMenuItem()
     private let actionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
+    private let aboutItem = NSMenuItem()
     private let loginItem = NSMenuItem()
     private let quitItem = NSMenuItem()
     private let quitRow = NSStackView()
@@ -62,6 +63,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         actionItem.target = self
         actionItem.action = #selector(actionClicked(_:))
         errorItem.isEnabled = false
+        aboutItem.title = "Sobre ContainerStatus"
+        aboutItem.target = self
+        aboutItem.action = #selector(showAbout(_:))
         loginItem.title = "Abrir no login"
         loginItem.target = self
         loginItem.action = #selector(toggleLogin(_:))
@@ -101,6 +105,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             menu.addItem(errorItem)
         }
         menu.addItem(.separator())
+        menu.addItem(aboutItem)
         menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(quitItem)
@@ -271,6 +276,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             detail = "Login: \(error.localizedDescription)"
         }
         apply()
+    }
+
+    @objc private func showAbout(_ sender: NSMenuItem) {
+        menu.cancelTracking()
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async {
+            NSApp.orderFrontStandardAboutPanel(options: [
+                .applicationName: "ContainerStatus",
+            ])
+        }
     }
 
     @objc private func openProjectPage() {

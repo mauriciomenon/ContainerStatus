@@ -25,3 +25,6 @@ AGENTS.md
 CLAUDE.md
 GEMINI.md
 AI_NOTES.md
+build/
+*.dmg
+!Icon.icns
