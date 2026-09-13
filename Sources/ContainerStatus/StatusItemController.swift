@@ -80,7 +80,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.removeAllItems()
         menu.addItem(headerItem)
         if let pathDisplay {
-            pathItem.attributedTitle = NSAttributedString(string: pathDisplay, attributes: [
+            // Long symlink chains break in two: resolved path on top,
+            // "via <symlink>" underneath.
+            let rendered = pathDisplay.count > 40 && pathDisplay.contains(" via ")
+                ? pathDisplay.replacingOccurrences(of: " via ", with: "\nvia ")
+                : pathDisplay
+            pathItem.attributedTitle = NSAttributedString(string: rendered, attributes: [
                 .font: NSFont.menuFont(ofSize: 10),
                 .foregroundColor: NSColor.secondaryLabelColor,
             ])
