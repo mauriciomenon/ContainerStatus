@@ -10,7 +10,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private static let projectLinkText = "github.com/apple/container"
     private static let repoURL = URL(string: "https://github.com/mauriciomenon/ContainerStatus")!
 
-    private let cli = ContainerCLI()
+    private let cli: ContainerCLI
     private let item = NSStatusBar.system.statusItem(withLength: 20)
     private let menu = NSMenu()
     private let pollQueue = DispatchQueue(label: "local.menon.containerstatus.poll", qos: .utility)
@@ -19,7 +19,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var detail: String?
     private var activity: ServiceActivity = .none
     private var cliVersion: String?
-    private var cliVersionPath: String?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
     private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
@@ -38,7 +37,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // MARK: Lifecycle
 
-    override init() {
+    init(cli: ContainerCLI = ContainerCLI()) {
+        self.cli = cli
         super.init()
         buildMenu()
         item.menu = menu
@@ -48,7 +48,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     func applicationDidFinishLaunching(_ notification: Notification) {
         startPolling()
         refreshNow()
-        fetchVersionInBackground()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -100,10 +99,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.addItem(.separator())
         menu.addItem(statusLineItem)
         menu.addItem(actionItem)
-        if let detail, !detail.isEmpty {
-            errorItem.title = detail
-            menu.addItem(errorItem)
-        }
         menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(aboutAppleItem)
@@ -115,6 +110,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Refreshes menu text and the status icon from the current state.
     private func apply() {
         item.button?.image = Self.dotImage(state: state, dimmed: activity != .none)
+        if let detail, !detail.isEmpty {
+            errorItem.title = detail
+            if errorItem.menu == nil {
+                menu.insertItem(errorItem, at: menu.index(of: loginItem))
+            }
+        } else if errorItem.menu != nil {
+            menu.removeItem(errorItem)
+        }
 
         let versionSuffix = cliVersion.map { " \($0)" } ?? ""
         switch state {
@@ -184,17 +187,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             state = poll.state
             detail = poll.detail
         }
-        // Refresh the header version whenever the resolved CLI changes
-        // (first find, install, upgrade or removal).
-        let currentPath = cli.currentBinaryPath()
-        if currentPath != cliVersionPath {
-            if currentPath != nil {
-                fetchVersionInBackground()
-            } else {
-                cliVersion = nil
-                cliVersionPath = nil
-            }
-        }
+        cliVersion = cli.currentVersion()
         let newPathDisplay = cli.resolvedPathInfo()
         if newPathDisplay != pathDisplay {
             pathDisplay = newPathDisplay
@@ -217,18 +210,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     func menuNeedsUpdate(_ menu: NSMenu) {
         refreshNow()
         if activity == .none { apply() }
-    }
-
-    private func fetchVersionInBackground() {
-        let cli = self.cli
-        Task.detached(priority: .utility) {
-            let version = cli.fetchVersion()
-            await MainActor.run { [weak self] in
-                self?.cliVersion = version
-                self?.cliVersionPath = cli.currentBinaryPath()
-                self?.apply()
-            }
-        }
     }
 
     // MARK: Actions
