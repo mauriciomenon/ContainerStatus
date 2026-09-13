@@ -30,9 +30,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let aboutItem = NSMenuItem()
     private let loginItem = NSMenuItem()
     private let quitItem = NSMenuItem()
-    private let quitRow = NSStackView()
-    private let quitButton = NSButton()
-    private let linkButton = NSButton()
 
     // MARK: Lifecycle
 
@@ -71,27 +68,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         loginItem.target = self
         loginItem.action = #selector(toggleLogin(_:))
 
-        quitButton.title = "Sair"
-        quitButton.isBordered = false
-        quitButton.font = .menuFont(ofSize: 0)
-        quitButton.target = self
-        quitButton.action = #selector(quitApp)
-
-        linkButton.title = "link"
-        linkButton.isBordered = false
-        linkButton.font = .menuFont(ofSize: 10)
-        linkButton.contentTintColor = .linkColor
-        linkButton.target = self
-        linkButton.action = #selector(openProjectPage)
-
-        quitRow.orientation = .horizontal
-        quitRow.alignment = .centerY
-        quitRow.spacing = 8
-        quitRow.edgeInsets = NSEdgeInsets(top: 3, left: 14, bottom: 3, right: 12)
-        quitRow.addView(quitButton, in: .leading)
-        quitRow.addView(linkButton, in: .trailing)
-        quitRow.setFrameSize(NSSize(width: 240, height: 24))
-        quitItem.view = quitRow
+        quitItem.title = "Sair"
+        quitItem.action = #selector(NSApplication.terminate(_:))
 
         rebuildMenu()
     }
@@ -323,11 +301,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     @objc private func openProjectPage() {
         menu.cancelTracking()
         NSWorkspace.shared.open(Self.projectURL)
-    }
-
-    @objc private func quitApp() {
-        menu.cancelTracking()
-        NSApp.terminate(nil)
     }
 
     // MARK: Icon
