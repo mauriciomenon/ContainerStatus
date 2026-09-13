@@ -300,10 +300,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         append("Repositorio\n", font: regular, link: repoURL)
         append("Apple container\n", font: regular, link: projectURL)
-        append("GPL 2.0\n", font: small, color: .secondaryLabelColor)
         if let buildDate, !buildDate.isEmpty {
-            append(buildDate, font: small, color: .secondaryLabelColor)
+            append(buildDate + "\n", font: small, color: .secondaryLabelColor)
         }
+        append("GPL 2.0", font: small, color: .secondaryLabelColor)
         return text
     }
 
