@@ -269,16 +269,25 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
     }
 
-    /// About panel content, top to bottom: author, base commit, repository
-    /// and project links, license, build date (all baked at package time).
+    /// About panel content, centered top to bottom: author, base commit,
+    /// repository and project links, license, build date (baked at package
+    /// time).
     private static func makeCredits() -> NSAttributedString {
         let info = Bundle.main.infoDictionary
         let commit = info?["GitCommit"] as? String
         let buildDate = info?["BuildDate"] as? String
 
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byWordWrapping
+
         let text = NSMutableAttributedString()
         func append(_ string: String, font: NSFont, color: NSColor = .labelColor, link: URL? = nil) {
-            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+            var attributes: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: color,
+                .paragraphStyle: paragraph,
+            ]
             if let link { attributes[.link] = link }
             text.append(NSAttributedString(string: string, attributes: attributes))
         }
