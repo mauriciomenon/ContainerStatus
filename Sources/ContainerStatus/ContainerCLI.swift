@@ -98,6 +98,15 @@ final class ContainerCLI: Sendable {
     /// refresh the displayed version).
     func currentBinaryPath() -> String? { resolvedBinaryPath }
 
+    /// Human-readable install info: "<path>", or, when the candidate is a
+    /// symlink, "<final resolved path> via <symlink>" — tells a brew install
+    /// (Cellar path via /opt/homebrew/bin) apart from a plain .pkg one.
+    func resolvedPathInfo() -> String? {
+        guard let path = currentBinaryPath() else { return nil }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return resolved == path ? path : "\(resolved) via \(path)"
+    }
+
     /// Resolved CLI path behind a lock so installs, upgrades and removals are
     /// picked up without restarting the app.
     private let pathLock: OSAllocatedUnfairLock<ResolvedCLI?>

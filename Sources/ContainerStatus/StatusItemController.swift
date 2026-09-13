@@ -20,10 +20,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var activity: ServiceActivity = .none
     private var cliVersion: String?
     private var cliVersionPath: String?
+    private var pathDisplay: String?
     private var pollTimer: DispatchSourceTimer?
 
     // Menu items, kept as references so state changes mutate them in place.
     private let headerItem = NSMenuItem()
+    private let pathItem = NSMenuItem()
     private let statusLineItem = NSMenuItem()
     private let actionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
@@ -77,6 +79,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private func rebuildMenu() {
         menu.removeAllItems()
         menu.addItem(headerItem)
+        if let pathDisplay {
+            pathItem.attributedTitle = NSAttributedString(string: pathDisplay, attributes: [
+                .font: NSFont.menuFont(ofSize: 10),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ])
+            pathItem.isEnabled = false
+            menu.addItem(pathItem)
+        }
         menu.addItem(statusLineItem)
         menu.addItem(actionItem)
         if let detail, !detail.isEmpty {
@@ -157,8 +167,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         pollTimer = timer
     }
 
-    /// Applies a poll result. Polls never overwrite a toggle in flight;
-    /// only the toggle completion advances out of the transitioning state.
     private func absorb(poll: (state: ServiceState, detail: String?)) {
         if activity == .none {
             state = poll.state
@@ -174,6 +182,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 cliVersion = nil
                 cliVersionPath = nil
             }
+        }
+        let newPathDisplay = cli.resolvedPathInfo()
+        if newPathDisplay != pathDisplay {
+            pathDisplay = newPathDisplay
+            rebuildMenu()
+            return
         }
         apply()
     }
