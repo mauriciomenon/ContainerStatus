@@ -179,6 +179,14 @@ evitando execucoes duplicadas. Nao ha pipeline macOS do GitLab pendente
 de runner: os [runners macOS hospedados](https://docs.gitlab.com/ci/runners/hosted_runners/macos/)
 exigem elegibilidade especifica e nao cobrem Intel.
 
+Se os jobs falharem antes da primeira etapa com bloqueio de cobranca da
+conta, confira os avisos em **Settings > Billing and licensing** e siga a
+[orientacao para desbloqueio](https://docs.github.com/en/billing/how-tos/troubleshooting/locked-account).
+Se nao houver pendencia visivel, consulte o suporte do GitHub; nao e uma
+falha corrigivel no workflow. Apos liberar a conta, use **Re-run all jobs**
+na execucao afetada ou acione o workflow em `master`. Confirme sucesso nos
+dois jobs e a presenca dos dois ZIPs antes de considerar a CI validada.
+
 ## Validacao visual e acessos externos
 
 - **Menu:** os testes AppKit verificam o comportamento, mas nao substituem
