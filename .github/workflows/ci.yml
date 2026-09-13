@@ -1,0 +1,71 @@
+name: Validacao macOS
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validar:
+    # Os outros remotes sao espelhos; evita repetir os builds.
+    if: github.repository == 'mauriciomenon/ContainerStatus'
+    name: macOS (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Obter fontes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Selecionar Swift 6.2
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.2.app
+          swift --version
+          uname -m
+
+      - name: Validar scripts, workflow e ausencia de segredos
+        if: matrix.runner == 'macos-15'
+        run: |
+          brew install actionlint shellcheck gitleaks
+          actionlint
+          shellcheck Scripts/*.sh
+          gitleaks dir --redact --no-banner .
+
+      - name: Validar icone e gerar bundle
+        run: |
+          Scripts/validate_assets.sh
+          Scripts/make_icon.sh
+          Scripts/package_app.sh
+
+      - name: Executar testes e validar bundle
+        run: |
+          ContainerStatus.app/Contents/MacOS/ContainerStatus --selftest-ui
+          Scripts/validate_assets.sh ContainerStatus.app
+
+      - name: Preparar ZIP
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        run: |
+          mkdir -p build
+          ditto -c -k --sequesterRsrc --keepParent ContainerStatus.app "build/ContainerStatus-$(uname -m).app.zip"
+
+      - name: Disponibilizar bundle validado
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: build/ContainerStatus-*.app.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 7
