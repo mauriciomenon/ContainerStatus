@@ -300,12 +300,18 @@ final class ContainerCLI: Sendable {
                 semaphore.wait()
             }
         }
-        // Teto para o caso de um processo neto segurar o pipe aberto.
-        _ = ioGroup.wait(timeout: .now() + 2)
+        // Teto para o caso de um processo neto segurar o pipe aberto. Se
+        // expirar, as Data ainda pertencem a ioQueue: nao le-las evita corrida
+        // e devolve saida vazia de proposito.
+        let ioCompleted = ioGroup.wait(timeout: .now() + 2) == .success
 
         if timedOut {
             return CLIRunResult(exitCode: process.terminationStatus, timedOut: true, spawned: true,
                                 stderr: "tempo limite excedido (\(Int(timeout))s)")
+        }
+        if !ioCompleted {
+            return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
+                                stderr: "saida nao disponivel: pipe mantido aberto por processo filho")
         }
         let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
         let stdoutText = String(data: stdoutData, encoding: .utf8) ?? ""
