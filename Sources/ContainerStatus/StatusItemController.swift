@@ -23,6 +23,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// App version shown next to the "Sobre ContainerStatus" item.
     private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var pollTimer: DispatchSourceTimer?
+    /// Checkmark do login vem daqui; SMAppService faz round-trip XPC, entao
+    /// o cache e renovado so ao abrir o menu e no proprio toggle.
+    private var loginEnabled: Bool
 
     // Menu items, kept as references so state changes mutate them in place.
     private let headerItem = NSMenuItem()
@@ -39,6 +42,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     init(cli: ContainerCLI = ContainerCLI()) {
         self.cli = cli
+        self.loginEnabled = Self.loginServiceEnabled
         super.init()
         buildMenu()
         item.menu = menu
@@ -163,7 +167,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
 
-        loginItem.state = Self.loginServiceEnabled ? .on : .off
+        loginItem.state = loginEnabled ? .on : .off
         loginItem.isEnabled = true
     }
 
@@ -208,6 +212,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        loginEnabled = Self.loginServiceEnabled
         refreshNow()
         if activity == .none { apply() }
     }
@@ -296,6 +301,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         } catch {
             detail = "Login: \(error.localizedDescription)"
         }
+        loginEnabled = Self.loginServiceEnabled
         apply()
     }
 
@@ -360,11 +366,33 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // MARK: Icon
 
+    /// All dot variants pre-rendered once: apply() runs a cada poll (3s) e
+    /// nao deve alocar NSImage nova a cada vez.
+    private static let dotImages: [String: NSImage] = {
+        var cache: [String: NSImage] = [:]
+        for dimmed in [false, true] {
+            for state in [ServiceState.running, .stopped, .notInstalled] {
+                cache[dotKey(state, dimmed)] = drawDot(state: state, dimmed: dimmed)
+            }
+        }
+        return cache
+    }()
+
+    private static func dotKey(_ state: ServiceState, _ dimmed: Bool) -> String {
+        let base: String
+        switch state {
+        case .running: base = "run"
+        case .stopped: base = "stop"
+        case .notInstalled: base = "none"
+        }
+        return dimmed ? base + "-d" : base
+    }
+
     /// Draws the status dot: filled green/red, hollow gray when the CLI is
     /// unavailable, dimmed while a toggle is in flight. The image is compact
     /// (16 px) inside a narrow status item so it takes little menu bar width,
     /// while the dot itself stays large and readable.
-    private static func dotImage(state: ServiceState, dimmed: Bool) -> NSImage {
+    private static func drawDot(state: ServiceState, dimmed: Bool) -> NSImage {
         let side: CGFloat = 16
         let alpha: CGFloat = dimmed ? 0.45 : 1.0
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
@@ -385,5 +413,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         image.isTemplate = false
         return image
+    }
+
+    private static func dotImage(state: ServiceState, dimmed: Bool) -> NSImage {
+        dotImages[dotKey(state, dimmed)]!
     }
 }
