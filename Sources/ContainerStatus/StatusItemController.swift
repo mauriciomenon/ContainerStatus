@@ -17,6 +17,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     private var state: ServiceState = .stopped
     private var detail: String?
+    /// Erro gravado pelo proprio app (toggle/login) sobrevive a polls saudaveis
+    /// ate um novo toggle ou um poll que traga detalhe proprio.
+    private var detailIsLocal = false
     private var activity: ServiceActivity = .none
     private var cliVersion: String?
     private var pathDisplay: String?
@@ -189,7 +192,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private func absorb(poll: (state: ServiceState, detail: String?)) {
         if activity == .none {
             state = poll.state
-            detail = poll.detail
+            if let pollDetail = poll.detail {
+                detail = pollDetail
+                detailIsLocal = false
+            } else if !detailIsLocal {
+                detail = nil
+            }
         }
         cliVersion = cli.currentVersion()
         let newPathDisplay = cli.resolvedPathInfo()
@@ -229,6 +237,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let turningOff = (state == .running)
         activity = turningOff ? .stopping : .starting
         detail = nil
+        detailIsLocal = false
         apply()
 
         let cli = self.cli
@@ -244,7 +253,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private func finish(result: CLIRunResult, poll: (state: ServiceState, detail: String?)) {
         activity = .none
         state = poll.state
-        detail = result.succeeded ? poll.detail : (ContainerCLI.firstLine(result.stderr).isEmpty ? "Operacao falhou" : ContainerCLI.firstLine(result.stderr))
+        if result.succeeded {
+            detail = poll.detail
+            detailIsLocal = false
+        } else {
+            let message = ContainerCLI.firstLine(result.stderr)
+            detail = message.isEmpty ? "Operacao falhou" : message
+            detailIsLocal = true
+        }
         apply()
     }
 
@@ -269,6 +285,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                           poll: (.running, nil))
         expect(controller.errorItem.title == "Falha ao parar" && controller.menu.numberOfItems == initialCount + 1,
                "nova falha atualiza erro sem duplicar item")
+
+        controller.absorb(poll: (.running, nil))
+        expect(controller.errorItem.title == "Falha ao parar" && controller.errorItem.menu === controller.menu,
+               "erro local de toggle sobrevive a poll saudavel")
+
+        controller.absorb(poll: (.stopped, "CLI retornou detalhe"))
+        expect(controller.errorItem.title == "CLI retornou detalhe",
+               "poll com detalhe proprio substitui erro local")
 
         controller.finish(result: CLIRunResult(exitCode: 0, spawned: true), poll: (.running, nil))
         expect(controller.errorItem.menu == nil && controller.menu.numberOfItems == initialCount,
@@ -300,6 +324,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         } catch {
             detail = "Login: \(error.localizedDescription)"
+            detailIsLocal = true
         }
         loginEnabled = Self.loginServiceEnabled
         apply()
@@ -316,7 +341,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         DispatchQueue.main.async {
             NSApp.orderFrontStandardAboutPanel(options: [
                 .applicationName: "ContainerStatus",
-                .applicationVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.1",
+                .applicationVersion: self.appVersion ?? "",
                 .credits: Self.makeCredits(),
             ])
         }

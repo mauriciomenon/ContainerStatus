@@ -6,7 +6,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 APP_NAME=${APP_NAME:-ContainerStatus}
-BUNDLE_ID=${BUNDLE_ID:-com.example.myapp}
+BUNDLE_ID=${BUNDLE_ID:-local.menon.ContainerStatus}
 MACOS_MIN_VERSION=${MACOS_MIN_VERSION:-13.0}
 MENU_BAR_APP=${MENU_BAR_APP:-1}
 SIGNING_MODE=${SIGNING_MODE:-}
@@ -14,7 +14,7 @@ APP_IDENTITY=${APP_IDENTITY:-}
 
 read_version_env() {
   local file=$1 line key value
-  local saw_marketing=0 saw_build=0
+  local saw_marketing=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     line=${line%$'\r'}
     [[ "$line" =~ ^[[:space:]]*$ || "$line" =~ ^[[:space:]]*# ]] && continue
@@ -29,18 +29,11 @@ read_version_env() {
         MARKETING_VERSION=$value
         saw_marketing=1
         ;;
-      BUILD_NUMBER)
-        [[ "$value" =~ ^[0-9]+$ ]] || {
-          echo "Invalid BUILD_NUMBER in version.env" >&2; return 1;
-        }
-        BUILD_NUMBER=$value
-        saw_build=1
-        ;;
       *) echo "Unknown key in version.env: $key" >&2; return 1 ;;
     esac
   done < "$file"
-  (( saw_marketing == 1 && saw_build == 1 )) || {
-    echo "version.env must define MARKETING_VERSION and BUILD_NUMBER" >&2
+  (( saw_marketing == 1 )) || {
+    echo "version.env must define MARKETING_VERSION" >&2
     return 1
   }
 }
@@ -68,7 +61,6 @@ if [[ -f "$ROOT/version.env" ]]; then
   read_version_env "$ROOT/version.env"
 else
   MARKETING_VERSION=${MARKETING_VERSION:-0.1.0}
-  BUILD_NUMBER=${BUILD_NUMBER:-1}
 fi
 
 read -r -a ARCH_LIST <<< "${ARCHES:-}"

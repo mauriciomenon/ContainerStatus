@@ -63,6 +63,8 @@ do {
         try require(plist["LSUIElement"] as? Bool == true, "LSUIElement deve ser true")
         try require(plist["LSMinimumSystemVersion"] as? String == "13.0", "macOS minimo deve ser 13.0")
         try require(plist["CFBundleIconFile"] as? String == "Icon", "CFBundleIconFile deve ser Icon")
+        try require(plist["CFBundleIdentifier"] as? String == "local.menon.ContainerStatus",
+                    "CFBundleIdentifier nao deve ser placeholder de template")
         try require(plist["CFBundleVersion"] == nil, "CFBundleVersion deve permanecer ausente")
         print("OK: Info.plist preserva produto, menu, icone e versao minima")
     }

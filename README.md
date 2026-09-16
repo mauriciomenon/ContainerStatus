@@ -6,20 +6,35 @@ controla o servico Apple `container` (github.com/apple/container).
 ## O que faz
 
 - Ponto **verde** na menu bar: servico ligado. **Vermelho**: desligado.
-- **Cinza vazado**: CLI `container` indisponivel (nao instalada ou travada).
-- Clique abre o menu:
-  - `Apple Container x.y.z` (versao da CLI)
-  - `Status: Ligado` / `Status: Desligado` / `Status: Nao instalado`
-  - `Ligar daemon` / `Desligar daemon`; sem a CLI, vira o link
-    `github.com/apple/container`
-  - `Abrir no login` (SMAppService, sem permissoes extras)
-  - `Sair` com um `link` discreto para o projeto no canto oposto
+  **Cinza vazado**: CLI `container` indisponivel (nao instalada ou travada).
+  Durante um toggle o dot fica esmaecido e o poll nao sobrescreve o estado
+  (sem piscar no meio da transicao).
+- Clique abre o menu, nesta ordem:
+
+```
+Apple Container x.y.z            versao da CLI em uso
+/usr/local/bin/container         caminho resolvido; "destino via symlink"
+                                 quando a instalacao e um link (ex.: brew)
+─────────────────────────────
+Status: Ligado / Desligado / Não instalado
+Ligar daemon / Desligar daemon   sem a CLI, vira o link do projeto
+[linha de erro, quando existe]   falha de operacao ou diagnostico do poll
+Abrir no login                   (SMAppService, sem permissoes extras)
+─────────────────────────────
+Sobre Apple Container            abre github.com/apple/container
+Sobre ContainerStatus x.y.z      painel Sobre do app
+Sair
+```
+
+- A linha de erro de um toggle que falhou permanece visivel (nao e apagada
+  pelo poll seguinte nem ao reabrir o menu); ela sai quando a operacao
+  seguinte tem exito ou quando um poll traz um diagnostico proprio.
+- **Sobre ContainerStatus**: painel centralizado com autor, commit-base do
+  build, link do repositorio, data de build ISO e GPL 2.0 na ultima linha.
 - Deteccao por polling da CLI oficial `container system status` (codigo de
   saida) a cada 3s, com watchdog de 2s. Start tem watchdog de 10s e stop de
   40s, permitindo a parada dos containers antes de remover o servico.
   O app nunca bloqueia a main thread.
-- Durante o toggle o dot fica esmaecido e o poll nao sobrescreve o estado
-  (sem piscar vermelho no meio da transicao).
 
 ## Politica de execucao e privilegios
 
@@ -148,15 +163,17 @@ dimensoes explicitas de bitmap e independe da escala da tela.
 
 `--selftest` executa 38 checagens do nucleo: estados, watchdog, parada
 lenta, descoberta da CLI, cache e concorrencia durante upgrades.
-`--selftest-ui` inclui mais 6 checagens de insercao, atualizacao e remocao
-da linha de erro do menu, inclusive apos recuperacao do polling. Exige uma
-sessao grafica do macOS; nao abre o menu nem altera o daemon ou o login.
+`--selftest-ui` inclui mais 8 checagens do menu: insercao, atualizacao e
+remocao da linha de erro, retencao de erro local de toggle apos polls
+saudaveis e substituicao por diagnostico do polling. Exige uma sessao
+grafica do macOS; nao abre o menu nem altera o daemon ou o login.
 Os dois modos encerram o processo com codigo diferente de zero se falharem.
 
 `validate_assets.sh` verifica as 10 imagens internas do ICNS, dimensoes,
 canal alfa, cantos transparentes e centro opaco. Com um bundle, tambem
-verifica nome do produto, macOS minimo, modo menu bar, ausencia intencional
-de `CFBundleVersion`, icone copiado e assinatura de todas as arquiteturas.
+verifica nome do produto, identificador do bundle (sem placeholder de
+template), macOS minimo, modo menu bar, ausencia intencional de
+`CFBundleVersion`, icone copiado e assinatura de todas as arquiteturas.
 
 ## CI e entrega de builds
 
