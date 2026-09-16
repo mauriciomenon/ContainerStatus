@@ -278,7 +278,7 @@ final class ContainerCLI: Sendable {
         // travaria o filho se a saida exceder o buffer do pipe (64KB).
         var stdoutData = Data()
         var stderrData = Data()
-        let ioQueue = DispatchQueue(label: "local.menon.containerstatus.io", qos: .utility)
+        let ioQueue = DispatchQueue(label: "local.containerstatus.io", qos: .utility)
         let ioGroup = DispatchGroup()
         ioGroup.enter()
         ioQueue.async {

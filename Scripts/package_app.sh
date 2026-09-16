@@ -6,7 +6,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 APP_NAME=${APP_NAME:-ContainerStatus}
-BUNDLE_ID=${BUNDLE_ID:-local.menon.ContainerStatus}
+BUNDLE_ID=${BUNDLE_ID:-local.ContainerStatus}
 MACOS_MIN_VERSION=${MACOS_MIN_VERSION:-13.0}
 MENU_BAR_APP=${MENU_BAR_APP:-1}
 SIGNING_MODE=${SIGNING_MODE:-}

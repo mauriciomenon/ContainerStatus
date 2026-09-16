@@ -13,7 +13,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let cli: ContainerCLI
     private let item = NSStatusBar.system.statusItem(withLength: 20)
     private let menu = NSMenu()
-    private let pollQueue = DispatchQueue(label: "local.menon.containerstatus.poll", qos: .utility)
+    private let pollQueue = DispatchQueue(label: "local.containerstatus.poll", qos: .utility)
 
     private var state: ServiceState = .stopped
     private var detail: String?
