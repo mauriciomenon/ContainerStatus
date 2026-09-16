@@ -74,6 +74,9 @@ final class ContainerCLI: Sendable {
     struct ResolvedCLI: Sendable, Equatable {
         var path: String
         var version: String?
+        /// "caminho", ou "destino via caminho" quando symlink. Calculado em
+        /// thread de fundo na resolucao para nao statar na main thread.
+        var pathInfo: String?
     }
 
     private struct CandidateSignature: Sendable, Equatable {
@@ -106,7 +109,15 @@ final class ContainerCLI: Sendable {
                 bestVersion = version
             }
         }
-        return ResolvedCLI(path: best, version: bestVersion)
+        return ResolvedCLI(path: best, version: bestVersion, pathInfo: makePathInfo(best))
+    }
+
+    /// "path", ou "resolved destination via path" when the candidate is a
+    /// symlink — tells a brew install (Cellar path via /opt/homebrew/bin)
+    /// apart from a plain .pkg one.
+    static func makePathInfo(_ path: String) -> String {
+        let destination = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return destination == path ? path : "\(destination) via \(path)"
     }
 
     static func resolveNewest(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> ResolvedCLI? {
@@ -119,13 +130,10 @@ final class ContainerCLI: Sendable {
 
     func currentVersion() -> String? { pathLock.withLock { $0.resolved?.version } }
 
-    /// Human-readable install info: "<path>", or, when the candidate is a
-    /// symlink, "<final resolved path> via <symlink>" — tells a brew install
-    /// (Cellar path via /opt/homebrew/bin) apart from a plain .pkg one.
+    /// Human-readable install info, served from the resolution cache (the
+    /// symlink walk happens on the background queue, at resolution time).
     func resolvedPathInfo() -> String? {
-        guard let path = currentBinaryPath() else { return nil }
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        return resolved == path ? path : "\(resolved) via \(path)"
+        pathLock.withLock { $0.resolved?.pathInfo }
     }
 
     /// Resolved CLI path behind a lock so installs, upgrades and removals are
@@ -140,7 +148,7 @@ final class ContainerCLI: Sendable {
 
     init(binaryPath: String? = nil, directories: [String] = ContainerCLI.searchDirectories()) {
         self.pathLock = OSAllocatedUnfairLock(initialState: ResolutionState(resolved: binaryPath.map {
-            ResolvedCLI(path: $0, version: nil)
+            ResolvedCLI(path: $0, version: nil, pathInfo: Self.makePathInfo($0))
         }))
         self.directories = directories
         self.environment = [
@@ -266,25 +274,44 @@ final class ContainerCLI: Sendable {
             return CLIRunResult(stderr: error.localizedDescription)
         }
 
-        var result: CLIRunResult
+        // Os pipes sao lidos em paralelo a execucao: ler so depois da saida
+        // travaria o filho se a saida exceder o buffer do pipe (64KB).
+        var stdoutData = Data()
+        var stderrData = Data()
+        let ioQueue = DispatchQueue(label: "local.menon.containerstatus.io", qos: .utility)
+        let ioGroup = DispatchGroup()
+        ioGroup.enter()
+        ioQueue.async {
+            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            ioGroup.leave()
+        }
+        ioGroup.enter()
+        ioQueue.async {
+            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            ioGroup.leave()
+        }
+
+        var timedOut = false
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            timedOut = true
             process.terminate()
             if semaphore.wait(timeout: .now() + 1.5) == .timedOut {
                 kill(process.processIdentifier, SIGKILL)
                 semaphore.wait()
             }
-            result = CLIRunResult(exitCode: process.terminationStatus, timedOut: true, spawned: true,
-                                  stderr: "tempo limite excedido (\(Int(timeout))s)")
-        } else {
-            let stderrText = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
-                                    encoding: .utf8) ?? ""
-            let stdoutText = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
-                                    encoding: .utf8) ?? ""
-            result = CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
-                                  stderr: stderrText.trimmingCharacters(in: .whitespacesAndNewlines),
-                                  stdout: stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        return result
+        // Teto para o caso de um processo neto segurar o pipe aberto.
+        _ = ioGroup.wait(timeout: .now() + 2)
+
+        if timedOut {
+            return CLIRunResult(exitCode: process.terminationStatus, timedOut: true, spawned: true,
+                                stderr: "tempo limite excedido (\(Int(timeout))s)")
+        }
+        let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
+        let stdoutText = String(data: stdoutData, encoding: .utf8) ?? ""
+        return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
+                            stderr: stderrText.trimmingCharacters(in: .whitespacesAndNewlines),
+                            stdout: stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     static func parseVersion(_ text: String) -> String? {
