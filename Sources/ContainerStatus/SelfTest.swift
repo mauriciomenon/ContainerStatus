@@ -186,5 +186,44 @@ enum SelfTest {
         let stopped = simulated.stop()
         expect(stopped.succeeded && Date().timeIntervalSince(started) >= 10,
                "parada simulada superior a 10s conclui sem watchdog")
+
+        try checkColima(in: temporary, expect: expect)
+    }
+
+    /// Sonda read-only do colima com binarios simulados (passo 1 do roadmap).
+    private static func writeColima(at url: URL, exitCode: Int, delay: TimeInterval = 0) throws {
+        let script = """
+        #!/bin/sh
+        if [ "$1" = status ]; then
+          \(delay > 0 ? "/bin/sleep \(delay)" : ":")
+          exit \(exitCode)
+        fi
+        exit 0
+        """
+        try script.write(to: url, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+    }
+
+    private static func checkColima(in temporary: URL, expect: (Bool, String) -> Void) throws {
+        let runningDirectory = temporary.appendingPathComponent("colima-running", isDirectory: true)
+        let stoppedDirectory = temporary.appendingPathComponent("colima-stopped", isDirectory: true)
+        for directory in [runningDirectory, stoppedDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        }
+        try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0)
+        try writeColima(at: stoppedDirectory.appendingPathComponent("colima"), exitCode: 1)
+
+        expect(ColimaProbe(directories: ["/no/such/dir"]).currentStatus().state == .notInstalled,
+               "colima ausente = nao instalado")
+        expect(ColimaProbe(directories: [runningDirectory.path]).currentStatus().state == .running,
+               "colima simulado ativo = ligado")
+        expect(ColimaProbe(directories: [stoppedDirectory.path]).currentStatus().state == .stopped,
+               "colima simulado parado = desligado")
+        try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0, delay: 5)
+        expect(ColimaProbe(directories: [runningDirectory.path]).currentStatus().state == .stopped,
+               "colima travado cai no watchdog e mostra desligado")
+        try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0)
+        expect(ColimaProbe(directories: [stoppedDirectory.path]).resolvedPath() != nil,
+               "caminho do colima acompanha candidato")
     }
 }
