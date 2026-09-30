@@ -32,9 +32,12 @@ Sair
 - **Sobre ContainerStatus**: painel centralizado com autor, commit-base do
   build, link do repositorio, data de build ISO e GPL 2.0 na ultima linha.
 - Deteccao por polling da CLI oficial `container system status` (codigo de
-  saida) a cada 3s, com watchdog de 2s. Start tem watchdog de 10s e stop de
-  40s, permitindo a parada dos containers antes de remover o servico.
-  O app nunca bloqueia a main thread.
+  saida) a cada 3s, com watchdog de 2s. Start e stop tem watchdog de 40s
+  (pior caso oficial: instalacao de kernel no start e parada de containers
+  no stop). O fallback `--disable-kernel-install` roda so apos falha
+  explicita do start puro, nunca apos timeout (o bootstrap pode continuar
+  no launchd). A operacao nao e cancelavel: o item fica desabilitado ate o
+  resultado (pior caso 40s). O app nunca bloqueia a main thread.
 
 ## Politica de execucao e privilegios
 
@@ -61,8 +64,8 @@ cada checagem enquanto nao for encontrado, sem restart):
 | Comando | Quando | Watchdog |
 |---|---|---|
 | `container system status` | poll a cada 3s e ao abrir o menu | 2s |
-| `container system start` | acao "Ligar daemon" | 10s |
-| `container system start --disable-kernel-install` | so se o start puro falhar/travar | 10s |
+| `container system start` | acao "Ligar daemon" | 40s |
+| `container system start --disable-kernel-install` | so se o start puro falhar com erro explicito | 40s |
 | `container system stop` | acao "Desligar daemon" | 40s |
 | `container --version` | descoberta ou alteracao de uma instalacao | 2s |
 
