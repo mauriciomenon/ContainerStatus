@@ -182,14 +182,36 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         timer.setEventHandler { [cli, weak self] in
             let result = cli.checkStatus()
             Task { @MainActor [weak self] in
-                self?.absorb(poll: result)
+                // O poll periodico e sempre o mais fresco possivel: usa
+                // sequence alto para nao ser descartado pelo guard.
+                self?.absorb(poll: result, sequence: Int.max)
             }
         }
         timer.resume()
         pollTimer = timer
     }
 
-    private func absorb(poll: (state: ServiceState, detail: String?)) {
+    /// Identifica checagens em voo: resultados velhos (timer + menu aberto)
+    /// podem chegar fora de ordem; o mais recente vence e um mais antigo que
+    /// chegue depois e descartado.
+    private var pollSequence = 0
+    private var lastAppliedSequence = -1
+
+    /// One-shot background check (used when the menu opens).
+    func refreshNow() {
+        pollSequence += 1
+        let sequence = pollSequence
+        pollQueue.async { [cli, weak self] in
+            let result = cli.checkStatus()
+            Task { @MainActor [weak self] in
+                self?.absorb(poll: result, sequence: sequence)
+            }
+        }
+    }
+
+    private func absorb(poll: (state: ServiceState, detail: String?), sequence: Int) {
+        guard sequence > lastAppliedSequence else { return }
+        lastAppliedSequence = sequence
         if activity == .none {
             state = poll.state
             if let pollDetail = poll.detail {
@@ -207,16 +229,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             return
         }
         apply()
-    }
-
-    /// One-shot background check (used when the menu opens).
-    func refreshNow() {
-        pollQueue.async { [cli, weak self] in
-            let result = cli.checkStatus()
-            Task { @MainActor [weak self] in
-                self?.absorb(poll: result)
-            }
-        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -286,11 +298,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.errorItem.title == "Falha ao parar" && controller.menu.numberOfItems == initialCount + 1,
                "nova falha atualiza erro sem duplicar item")
 
-        controller.absorb(poll: (.running, nil))
+        controller.absorb(poll: (.running, nil), sequence: 0)
         expect(controller.errorItem.title == "Falha ao parar" && controller.errorItem.menu === controller.menu,
                "erro local de toggle sobrevive a poll saudavel")
 
-        controller.absorb(poll: (.stopped, "CLI retornou detalhe"))
+        controller.absorb(poll: (.stopped, "CLI retornou detalhe"), sequence: 1)
         expect(controller.errorItem.title == "CLI retornou detalhe",
                "poll com detalhe proprio substitui erro local")
 
@@ -298,13 +310,26 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.errorItem.menu == nil && controller.menu.numberOfItems == initialCount,
                "operacao bem-sucedida remove erro anterior")
 
-        controller.absorb(poll: (.notInstalled, "CLI indisponivel"))
+        controller.absorb(poll: (.notInstalled, "CLI indisponivel"), sequence: 2)
         expect(controller.errorItem.title == "CLI indisponivel" && controller.errorItem.menu === controller.menu,
                "polling com falha exibe erro")
 
-        controller.absorb(poll: (.running, nil))
+        controller.absorb(poll: (.running, nil), sequence: 3)
         expect(controller.errorItem.menu == nil && controller.menu.numberOfItems == initialCount,
                "recuperacao no polling remove erro")
+
+        // Checagens em voo fora de ordem: um resultado antigo (sequence menor
+        // que o ultimo aplicado) nao sobrescreve o estado recente. O poll
+        // periodico usa Int.max, entao aplica-se mesmo depois de um refresh
+        // do menu (sequence alto e sempre menor que Int.max... na pratica o
+        // timer e sempre aplicado — que e o comportamento desejado: o poll
+        // periodico e a fonte de verdade).
+        controller.absorb(poll: (.notInstalled, "checagem antiga"), sequence: 1)
+        expect(controller.state == .running && controller.errorItem.menu == nil,
+               "poll antigo fora de ordem e descartado")
+        controller.absorb(poll: (.running, nil), sequence: 4)
+        expect(controller.state == .running,
+               "poll novo em sequencia correta aplica")
     }
 
     // MARK: Launch at login

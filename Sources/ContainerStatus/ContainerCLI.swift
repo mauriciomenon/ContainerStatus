@@ -12,8 +12,11 @@ import os
 final class ContainerCLI: Sendable {
     /// Watchdog for `container system status`.
     private static let statusTimeout: TimeInterval = 2
-    /// Prazo de `container system start`.
-    private static let mutationTimeout: TimeInterval = 10
+    /// Prazo de `container system start`. Cobre o pior caso oficial: instalacao
+    /// de kernel pode demorar minutos, e um start morto pelo watchdog deixa o
+    /// bootstrap em andamento no launchd — um fallback rodaria sobre ele.
+    /// Alinhado com o stop: esperar e mais seguro que tentar de novo.
+    private static let mutationTimeout: TimeInterval = 40
     /// Cobre os 5s + 20s de espera da CLI e a comunicacao com o servico.
     private static let stopTimeout: TimeInterval = 40
 
@@ -181,12 +184,15 @@ final class ContainerCLI: Sendable {
     }
 
     /// Starts the service stack. Tries the plain `container system start`
-    /// first (correct behavior, installs the kernel when needed); if that
-    /// fails or hangs, retries once skipping the interactive first-run kernel
-    /// prompt.
+    /// first (correct behavior, installs the kernel when needed); the retry
+    /// skipping the interactive first-run kernel prompt roda somente apos
+    /// falha explicita — nunca apos timeout, porque um start morto pelo
+    /// watchdog deixa o bootstrap em andamento no launchd e um segundo start
+    /// colidiria com ele.
     func start() -> CLIRunResult {
         let plain = run(["system", "start"], timeout: Self.mutationTimeout)
         if plain.succeeded { return plain }
+        if plain.timedOut { return plain }
         let fallback = run(["system", "start", "--disable-kernel-install"], timeout: Self.mutationTimeout)
         if fallback.succeeded { return fallback }
         return plain.spawned ? plain : fallback
