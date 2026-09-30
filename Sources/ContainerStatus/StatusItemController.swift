@@ -163,7 +163,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 actionItem.isEnabled = true
                 actionItem.state = .off
             case .notInstalled:
-                statusLineItem.title = "Status: Não instalado"
+                statusLineItem.title = "Status: Nao instalado"
                 actionItem.title = Self.projectLinkText
                 actionItem.isEnabled = true
                 actionItem.state = .off
@@ -179,12 +179,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private func startPolling(every interval: TimeInterval = 3) {
         let timer = DispatchSource.makeTimerSource(queue: pollQueue)
         timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler { [cli, weak self] in
-            let result = cli.checkStatus()
+        timer.setEventHandler { [weak self] in
             Task { @MainActor [weak self] in
-                // O poll periodico e sempre o mais fresco possivel: usa
-                // sequence alto para nao ser descartado pelo guard.
-                self?.absorb(poll: result, sequence: Int.max)
+                // O poll periodico e a fonte de verdade: usa sequence alto
+                // para nao ser descartado pelo guard de ordem.
+                self?.spawnPoll(sequence: Int.max)
             }
         }
         timer.resume()
@@ -196,20 +195,32 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// chegue depois e descartado.
     private var pollSequence = 0
     private var lastAppliedSequence = -1
+    /// Barreira de mutacao: finish() avanca a epoca e toda leitura em voo
+    /// iniciada antes dela (inclusive o poll periodico, cujo sequence Int.max
+    /// passa pelo guard de ordem) e descartada no absorb.
+    private var mutationEpoch = 0
 
-    /// One-shot background check (used when the menu opens).
-    func refreshNow() {
-        pollSequence += 1
-        let sequence = pollSequence
+    /// Captura a epoca no main actor ANTES de enfileirar a leitura; o absorb
+    /// so aceita leituras da epoca corrente.
+    private func spawnPoll(sequence: Int) {
+        let epoch = mutationEpoch
         pollQueue.async { [cli, weak self] in
             let result = cli.checkStatus()
             Task { @MainActor [weak self] in
-                self?.absorb(poll: result, sequence: sequence)
+                self?.absorb(poll: result, sequence: sequence, epoch: epoch)
             }
         }
     }
 
-    private func absorb(poll: (state: ServiceState, detail: String?), sequence: Int) {
+    /// One-shot background check (used when the menu opens).
+    func refreshNow() {
+        pollSequence += 1
+        spawnPoll(sequence: pollSequence)
+    }
+
+    private func absorb(poll: (state: ServiceState, detail: String?), sequence: Int,
+                        epoch: Int = Int.max) {
+        guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
         lastAppliedSequence = sequence
         if activity == .none {
@@ -263,6 +274,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     private func finish(result: CLIRunResult, poll: (state: ServiceState, detail: String?)) {
+        mutationEpoch += 1
         activity = .none
         state = poll.state
         if result.succeeded {
@@ -320,16 +332,26 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // Checagens em voo fora de ordem: um resultado antigo (sequence menor
         // que o ultimo aplicado) nao sobrescreve o estado recente. O poll
-        // periodico usa Int.max, entao aplica-se mesmo depois de um refresh
-        // do menu (sequence alto e sempre menor que Int.max... na pratica o
-        // timer e sempre aplicado — que e o comportamento desejado: o poll
-        // periodico e a fonte de verdade).
+        // periodico usa Int.max, entao passa pelo guard de ordem; o que o
+        // segura e a epoca de mutacao (ver abaixo).
         controller.absorb(poll: (.notInstalled, "checagem antiga"), sequence: 1)
         expect(controller.state == .running && controller.errorItem.menu == nil,
                "poll antigo fora de ordem e descartado")
         controller.absorb(poll: (.running, nil), sequence: 4)
         expect(controller.state == .running,
                "poll novo em sequencia correta aplica")
+
+        // Barreira de epoca: uma leitura que comecou ANTES de finish() nao
+        // pode aterrissar depois da mutacao com estado de meio-caminho, mesmo
+        // sendo o poll periodico (sequence Int.max).
+        let epochBefore = controller.mutationEpoch
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true), poll: (.running, nil))
+        controller.absorb(poll: (.stopped, nil), sequence: Int.max, epoch: epochBefore)
+        expect(controller.state == .running && controller.errorItem.menu == nil,
+               "poll de epoca anterior a mutacao e descartado")
+        controller.absorb(poll: (.running, nil), sequence: Int.max, epoch: controller.mutationEpoch)
+        expect(controller.state == .running,
+               "poll da epoca corrente aplica")
     }
 
     // MARK: Launch at login

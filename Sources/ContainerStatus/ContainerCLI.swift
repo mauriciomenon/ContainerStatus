@@ -14,7 +14,7 @@ final class ContainerCLI: Sendable {
     private static let statusTimeout: TimeInterval = 2
     /// Prazo de `container system start`. Cobre o pior caso oficial: instalacao
     /// de kernel pode demorar minutos, e um start morto pelo watchdog deixa o
-    /// bootstrap em andamento no launchd — um fallback rodaria sobre ele.
+    /// bootstrap em andamento no launchd - um fallback rodaria sobre ele.
     /// Alinhado com o stop: esperar e mais seguro que tentar de novo.
     private static let mutationTimeout: TimeInterval = 40
     /// Cobre os 5s + 20s de espera da CLI e a comunicacao com o servico.
@@ -116,7 +116,7 @@ final class ContainerCLI: Sendable {
     }
 
     /// "path", ou "resolved destination via path" when the candidate is a
-    /// symlink — tells a brew install (Cellar path via /opt/homebrew/bin)
+    /// symlink - tells a brew install (Cellar path via /opt/homebrew/bin)
     /// apart from a plain .pkg one.
     static func makePathInfo(_ path: String) -> String {
         let destination = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
@@ -186,7 +186,7 @@ final class ContainerCLI: Sendable {
     /// Starts the service stack. Tries the plain `container system start`
     /// first (correct behavior, installs the kernel when needed); the retry
     /// skipping the interactive first-run kernel prompt roda somente apos
-    /// falha explicita — nunca apos timeout, porque um start morto pelo
+    /// falha explicita - nunca apos timeout, porque um start morto pelo
     /// watchdog deixa o bootstrap em andamento no launchd e um segundo start
     /// colidiria com ele.
     func start() -> CLIRunResult {
