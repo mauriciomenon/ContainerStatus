@@ -16,7 +16,7 @@ Apple Container x.y.z            versao da CLI em uso
 /usr/local/bin/container         caminho resolvido; "destino via symlink"
                                  quando a instalacao e um link (ex.: brew)
 ─────────────────────────────
-Status: Ligado / Desligado / Não instalado
+Status: Ligado / Desligado / Nao instalado
 Ligar daemon / Desligar daemon   sem a CLI, vira o link do projeto
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Abrir no login                   (SMAppService, sem permissoes extras)
@@ -166,9 +166,10 @@ dimensoes explicitas de bitmap e independe da escala da tela.
 
 `--selftest` executa 38 checagens do nucleo: estados, watchdog, parada
 lenta, descoberta da CLI, cache e concorrencia durante upgrades.
-`--selftest-ui` inclui mais 8 checagens do menu: insercao, atualizacao e
+`--selftest-ui` inclui mais 13 checagens do menu: insercao, atualizacao e
 remocao da linha de erro, retencao de erro local de toggle apos polls
-saudaveis e substituicao por diagnostico do polling. Exige uma sessao
+saudaveis, substituicao por diagnostico do polling, ordem de checagens em
+voo (sequencia e epoca de mutacao) e insercao com anchor degradado. Exige uma sessao
 grafica do macOS; nao abre o menu nem altera o daemon ou o login.
 Os dois modos encerram o processo com codigo diferente de zero se falharem.
 

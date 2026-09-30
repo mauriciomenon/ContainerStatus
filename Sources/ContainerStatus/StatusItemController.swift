@@ -120,7 +120,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if let detail, !detail.isEmpty {
             errorItem.title = detail
             if errorItem.menu == nil {
-                menu.insertItem(errorItem, at: menu.index(of: loginItem))
+                // Anchor fragil se a estrutura do menu mudar: index(of:)
+                // retorna -1 e insertItem(at: -1) levanta excecao. O erro
+                // entra no fim do menu como fallback seguro.
+                let anchor = menu.index(of: loginItem)
+                menu.insertItem(errorItem, at: anchor >= 0 ? anchor : menu.numberOfItems)
             }
         } else if errorItem.menu != nil {
             menu.removeItem(errorItem)
@@ -352,6 +356,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         controller.absorb(poll: (.running, nil), sequence: Int.max, epoch: controller.mutationEpoch)
         expect(controller.state == .running,
                "poll da epoca corrente aplica")
+
+        // Anchor degradado: se a estrutura mudar e loginItem sair do menu,
+        // o insert precisa cair no fim (index(of:) = -1) sem excecao.
+        controller.menu.removeItem(controller.loginItem)
+        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Falha sem anchor"),
+                          poll: (.running, nil))
+        expect(controller.errorItem.menu === controller.menu
+               && controller.menu.index(of: controller.errorItem) == controller.menu.numberOfItems - 1,
+               "erro sem loginItem no menu insere no fim sem excecao")
     }
 
     // MARK: Launch at login
