@@ -17,8 +17,8 @@ Apple Container x.y.z            versao da CLI em uso
                                  quando a instalacao e um link (ex.: brew)
 ─────────────────────────────
 Status: Ligado / Desligado / Nao instalado
-Colima: Ligado / Desligado      so aparece com o colima instalado
-                                 (somente-leitura, passo 1 do ROADMAP)
+Colima / Docker / Podman /      linha por runtime instalado, read-only
+Lume / OrbStack: ...            (passo 1 do ROADMAP multi-runtime)
 Ligar daemon / Desligar daemon   sem a CLI, vira o link do projeto
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Abrir no login                   (SMAppService, sem permissoes extras)
