@@ -5,6 +5,9 @@ import Foundation
 struct AppMain {
     @MainActor
     static func main() {
+        if CommandLine.arguments.contains("--probe-runtimes") {
+            Self.probeRuntimesAndExit()
+        }
         let includeUI = CommandLine.arguments.contains("--selftest-ui")
         if includeUI || CommandLine.arguments.contains("--selftest") {
             SelfTest.runAndExit(includeUI: includeUI)
@@ -16,5 +19,22 @@ struct AppMain {
             app.delegate = controller
             app.run()
         }
+    }
+
+    /// Diagnostico read-only das sondas contra as CLIs reais da maquina
+    /// (validacao de planta do passo 1 do roadmap); nao altera nada.
+    @MainActor
+    static func probeRuntimesAndExit() -> Never {
+        for probe in RuntimeProbeConfig.standard.map({ RuntimeProbe(config: $0) }) {
+            let (runtimeState, path) = probe.currentStatus()
+            let label: String
+            switch runtimeState {
+            case .notInstalled: label = "nao instalado"
+            case .running: label = "ligado"
+            case .stopped: label = "desligado"
+            }
+            print("\(probe.label): \(label)\(path.map { " (\($0))" } ?? "")")
+        }
+        exit(0)
     }
 }
