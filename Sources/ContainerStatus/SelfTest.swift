@@ -190,7 +190,7 @@ enum SelfTest {
         try checkColima(in: temporary, expect: expect)
     }
 
-    /// Sonda read-only do colima com binarios simulados (passo 1 do roadmap).
+    /// Sonda read-only de runtime com binarios simulados (passo 1 do roadmap).
     private static func writeColima(at url: URL, exitCode: Int, delay: TimeInterval = 0) throws {
         let script = """
         #!/bin/sh
@@ -213,17 +213,18 @@ enum SelfTest {
         try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0)
         try writeColima(at: stoppedDirectory.appendingPathComponent("colima"), exitCode: 1)
 
-        expect(ColimaProbe(directories: ["/no/such/dir"]).currentStatus().state == .notInstalled,
+        let missing = RuntimeProbe(config: .colima, directories: ["/no/such/dir"])
+        expect(missing.currentStatus().state == .notInstalled,
                "colima ausente = nao instalado")
-        expect(ColimaProbe(directories: [runningDirectory.path]).currentStatus().state == .running,
-               "colima simulado ativo = ligado")
-        expect(ColimaProbe(directories: [stoppedDirectory.path]).currentStatus().state == .stopped,
-               "colima simulado parado = desligado")
+        expect(RuntimeProbe(config: .colima, directories: [runningDirectory.path])
+            .currentStatus().state == .running, "colima simulado ativo = ligado")
+        expect(RuntimeProbe(config: .colima, directories: [stoppedDirectory.path])
+            .currentStatus().state == .stopped, "colima simulado parado = desligado")
         try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0, delay: 5)
-        expect(ColimaProbe(directories: [runningDirectory.path]).currentStatus().state == .stopped,
-               "colima travado cai no watchdog e mostra desligado")
+        expect(RuntimeProbe(config: .colima, directories: [runningDirectory.path])
+            .currentStatus().state == .stopped, "colima travado cai no watchdog e mostra desligado")
         try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0)
-        expect(ColimaProbe(directories: [stoppedDirectory.path]).resolvedPath() != nil,
+        expect(RuntimeProbe(config: .colima, directories: [stoppedDirectory.path]).resolvedPath() != nil,
                "caminho do colima acompanha candidato")
     }
 }

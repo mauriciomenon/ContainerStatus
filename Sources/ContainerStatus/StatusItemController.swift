@@ -11,7 +11,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private static let repoURL = URL(string: "https://github.com/mauriciomenon/ContainerStatus")!
 
     private let cli: ContainerCLI
-    private let colima: ColimaProbe
+    /// Sondas read-only dos runtimes do roadmap, ordem fixa de exibicao.
+    private let runtimes: [RuntimeProbe]
     private let item = NSStatusBar.system.statusItem(withLength: 20)
     private let menu = NSMenu()
     private let pollQueue = DispatchQueue(label: "local.containerstatus.poll", qos: .utility)
@@ -22,8 +23,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// ate um novo toggle ou um poll que traga detalhe proprio.
     private var detailIsLocal = false
     private var activity: ServiceActivity = .none
-    /// Sonda read-only do colima (passo 1 do roadmap multi-runtime).
-    private var colimaState: ExternalRuntimeState = .notInstalled
+    /// Estados read-only por runtime (passo 1 do roadmap multi-runtime),
+    /// atualizados em absorb no main actor.
+    private var runtimeStates: [String: ExternalRuntimeState] = [:]
     private var cliVersion: String?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
@@ -37,7 +39,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let headerItem = NSMenuItem()
     private let pathItem = NSMenuItem()
     private let statusLineItem = NSMenuItem()
-    private let colimaItem = NSMenuItem()
+    /// Uma linha informativa por runtime, criada sob demanda em apply().
+    private lazy var runtimeItems: [String: NSMenuItem] = Dictionary(
+        uniqueKeysWithValues: runtimes.map { ($0.label, NSMenuItem()) }
+    )
     private let actionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
     private let aboutAppleItem = NSMenuItem()
@@ -47,9 +52,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // MARK: Lifecycle
 
-    init(cli: ContainerCLI = ContainerCLI(), colima: ColimaProbe = ColimaProbe()) {
+    init(cli: ContainerCLI = ContainerCLI(),
+         runtimes: [RuntimeProbe] = RuntimeProbeConfig.standard.map { RuntimeProbe(config: $0) }) {
         self.cli = cli
-        self.colima = colima
+        self.runtimes = runtimes
         self.loginEnabled = Self.loginServiceEnabled
         super.init()
         buildMenu()
@@ -74,8 +80,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         headerItem.isEnabled = false
         statusLineItem.isEnabled = false
-        colimaItem.isEnabled = false
-        colimaItem.title = "Colima: Desligado"
+        for item in runtimeItems.values {
+            item.isEnabled = false
+        }
         actionItem.target = self
         actionItem.action = #selector(actionClicked(_:))
         errorItem.isEnabled = false
@@ -137,19 +144,27 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             menu.removeItem(errorItem)
         }
 
-        // Linha informativa do colima: entra logo abaixo do Status e some
-        // quando o binario nao existe (insert/remove sincronizados aqui,
-        // unico caminho de atualizacao - regra 5).
-        if colimaState == .notInstalled {
-            if colimaItem.menu != nil {
-                menu.removeItem(colimaItem)
-            }
-        } else {
-            colimaItem.title = colimaState == .running ? "Colima: Ligado" : "Colima: Desligado"
-            colimaItem.isEnabled = false
-            if colimaItem.menu == nil {
-                let anchor = menu.index(of: statusLineItem)
-                menu.insertItem(colimaItem, at: anchor >= 0 ? anchor + 1 : menu.numberOfItems)
+        // Linhas informativas dos runtimes (passo 1 do roadmap): entram
+        // abaixo do Status em ordem fixa e somem quando o binario nao existe.
+        // Insert/remove sincronizados neste unico caminho (regra 5). O anchor
+        // de cada linha e o item anterior PRESENTE no menu, para nao depender
+        // de quem esta instalado.
+        var anchorItem = statusLineItem
+        for probe in runtimes {
+            let item = runtimeItems[probe.label] ?? NSMenuItem()
+            let runtimeState = runtimeStates[probe.label] ?? .notInstalled
+            if runtimeState == .notInstalled {
+                if item.menu != nil {
+                    menu.removeItem(item)
+                }
+            } else {
+                item.title = "\(probe.label): \(runtimeState == .running ? "Ligado" : "Desligado")"
+                item.isEnabled = false
+                if item.menu == nil {
+                    let anchor = menu.index(of: anchorItem)
+                    menu.insertItem(item, at: anchor >= 0 ? anchor + 1 : menu.numberOfItems)
+                }
+                anchorItem = item
             }
         }
 
@@ -231,11 +246,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// so aceita leituras da epoca corrente.
     private func spawnPoll(sequence: Int) {
         let epoch = mutationEpoch
-        pollQueue.async { [cli, colima, weak self] in
+        pollQueue.async { [cli, runtimes, weak self] in
             let result = cli.checkStatus()
-            let colimaState = colima.currentStatus().state
+            // Sondas read-only em serie no pollQueue: cada uma com watchdog
+            // proprio de 2s. Quem nao esta instalado custa so stat.
+            let states = Dictionary(uniqueKeysWithValues: runtimes.map {
+                ($0.label, $0.currentStatus().state)
+            })
             Task { @MainActor [weak self] in
-                self?.absorb(poll: result, colima: colimaState, sequence: sequence, epoch: epoch)
+                self?.absorb(poll: result, runtimes: states, sequence: sequence, epoch: epoch)
             }
         }
     }
@@ -246,12 +265,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         spawnPoll(sequence: pollSequence)
     }
 
-    private func absorb(poll: (state: ServiceState, detail: String?), colima: ExternalRuntimeState? = nil,
+    private func absorb(poll: (state: ServiceState, detail: String?),
+                        runtimes: [String: ExternalRuntimeState]? = nil,
                         sequence: Int, epoch: Int = Int.max) {
         guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
-        if let colima {
-            self.colimaState = colima
+        if let runtimes {
+            self.runtimeStates = runtimes
         }
         lastAppliedSequence = sequence
         if activity == .none {
@@ -322,14 +342,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // Regressao opcional de AppKit, sem iniciar polling ou executar a CLI real.
     static func checkMenuErrors(expect: (Bool, String) -> Void) {
         NSApplication.shared.setActivationPolicy(.accessory)
-        let controller = StatusItemController(cli: ContainerCLI(directories: []),
-                                              colima: ColimaProbe(directories: []))
+        let controller = StatusItemController(
+            cli: ContainerCLI(directories: []),
+            runtimes: [RuntimeProbe(config: .colima, directories: [])])
         controller.item.isVisible = false
         defer { NSStatusBar.system.removeStatusItem(controller.item) }
 
         let initialCount = controller.menu.numberOfItems
         expect(controller.errorItem.menu == nil, "menu inicia sem linha de erro")
-        expect(controller.menu.index(of: controller.colimaItem) == -1,
+        expect(controller.menu.index(of: controller.runtimeItems["Colima"] ?? NSMenuItem()) == -1,
                "menu inicia sem linha de colima")
 
         controller.finish(result: CLIRunResult(exitCode: 1, spawned: true,
@@ -398,22 +419,24 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // Linha read-only do colima: entra abaixo do Status quando o binario
         // existe e some quando ele desaparece (insert/remove em apply, regra 5).
-        let colimaController = StatusItemController(cli: ContainerCLI(directories: []),
-                                                    colima: ColimaProbe(directories: []))
+        let colimaController = StatusItemController(
+            cli: ContainerCLI(directories: []),
+            runtimes: [RuntimeProbe(config: .colima, directories: [])])
         colimaController.item.isVisible = false
         defer { NSStatusBar.system.removeStatusItem(colimaController.item) }
         let colimaCount = colimaController.menu.numberOfItems
-        colimaController.absorb(poll: (.running, nil), colima: .running, sequence: 1)
-        expect(colimaController.menu.index(of: colimaController.colimaItem)
+        let colimaRow = { colimaController.runtimeItems["Colima"] ?? NSMenuItem() }
+        colimaController.absorb(poll: (.running, nil), runtimes: ["Colima": .running], sequence: 1)
+        expect(colimaController.menu.index(of: colimaRow())
                == colimaController.menu.index(of: colimaController.statusLineItem) + 1
-               && colimaController.colimaItem.title == "Colima: Ligado",
+               && colimaRow().title == "Colima: Ligado",
                "colima ligado insere linha informativa abaixo do Status")
-        colimaController.absorb(poll: (.running, nil), colima: .stopped, sequence: 2)
-        expect(colimaController.colimaItem.title == "Colima: Desligado"
-               && colimaController.menu.index(of: colimaController.colimaItem) != -1,
+        colimaController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 2)
+        expect(colimaRow().title == "Colima: Desligado"
+               && colimaController.menu.index(of: colimaRow()) != -1,
                "colima parado atualiza a linha sem duplicar item")
-        colimaController.absorb(poll: (.running, nil), colima: .notInstalled, sequence: 3)
-        expect(colimaController.menu.index(of: colimaController.colimaItem) == -1
+        colimaController.absorb(poll: (.running, nil), runtimes: ["Colima": .notInstalled], sequence: 3)
+        expect(colimaController.menu.index(of: colimaRow()) == -1
                && colimaController.menu.numberOfItems == colimaCount,
                "colima removido tira a linha do menu")
     }
