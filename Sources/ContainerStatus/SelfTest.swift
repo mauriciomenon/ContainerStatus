@@ -188,6 +188,75 @@ enum SelfTest {
                "parada simulada superior a 10s conclui sem watchdog")
 
         try checkColima(in: temporary, expect: expect)
+        try checkRuntimeRecipes(in: temporary, expect: expect)
+    }
+
+    /// Receitas dos demais runtimes do roadmap, com binarios simulados que
+    /// reproduzem a saida real de cada CLI (docker info, podman machine
+    /// list, lume ls, orbctl status).
+    private static func checkRuntimeRecipes(in temporary: URL, expect: (Bool, String) -> Void) throws {
+        func stub(_ name: String, _ directory: URL, stdout: String, exitCode: Int) throws -> String {
+            let path = directory.appendingPathComponent(name).path
+            let script = """
+            #!/bin/sh
+            cat <<'EOF'
+            \(stdout)
+            EOF
+            exit \(exitCode)
+            """
+            try script.write(toFile: path, atomically: false, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+            return path
+        }
+        func bare(_ name: String, _ directory: URL, exitCode: Int) throws -> String {
+            let path = directory.appendingPathComponent(name).path
+            let script = "#!/bin/sh\nexit \(exitCode)\n"
+            try script.write(toFile: path, atomically: false, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+            return path
+        }
+
+        // Docker: exit 0 = daemon responde; erro = CLI sem daemon.
+        let dockerDirectory = temporary.appendingPathComponent("docker", isDirectory: true)
+        try FileManager.default.createDirectory(at: dockerDirectory, withIntermediateDirectories: false)
+        try bare("docker", dockerDirectory, exitCode: 0)
+        expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
+            .currentStatus().state == .running, "docker com daemon = ligado")
+        try bare("docker", dockerDirectory, exitCode: 1)
+        expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
+            .currentStatus().state == .stopped, "docker sem daemon = desligado")
+
+        // Podman: JSON de machine list com maquina Running.
+        let podmanDirectory = temporary.appendingPathComponent("podman", isDirectory: true)
+        try FileManager.default.createDirectory(at: podmanDirectory, withIntermediateDirectories: false)
+        try stub("podman", podmanDirectory,
+                 stdout: "[{\"Name\":\"pm\",\"State\":\"Running\"}]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .running, "podman com maquina running = ligado")
+        try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .stopped, "podman sem maquina = desligado")
+
+        // Lume: JSON de ls com VM running (exit 0 mesmo sem VMs).
+        let lumeDirectory = temporary.appendingPathComponent("lume", isDirectory: true)
+        try FileManager.default.createDirectory(at: lumeDirectory, withIntermediateDirectories: false)
+        try stub("lume", lumeDirectory,
+                 stdout: "[{\"name\":\"macos\",\"status\":\"running\"}]", exitCode: 0)
+        expect(RuntimeProbe(config: .lume, directories: [lumeDirectory.path])
+            .currentStatus().state == .running, "lume com VM running = ligado")
+        try stub("lume", lumeDirectory, stdout: "[\n\n]", exitCode: 0)
+        expect(RuntimeProbe(config: .lume, directories: [lumeDirectory.path])
+            .currentStatus().state == .stopped, "lume sem VMs = desligado")
+
+        // OrbStack: orbctl status "Running" exit 0; erro = parado.
+        let orbstackDirectory = temporary.appendingPathComponent("orbstack", isDirectory: true)
+        try FileManager.default.createDirectory(at: orbstackDirectory, withIntermediateDirectories: false)
+        try stub("orbctl", orbstackDirectory, stdout: "Running", exitCode: 0)
+        expect(RuntimeProbe(config: .orbstack, directories: [orbstackDirectory.path])
+            .currentStatus().state == .running, "orbstack running = ligado")
+        try bare("orbctl", orbstackDirectory, exitCode: 1)
+        expect(RuntimeProbe(config: .orbstack, directories: [orbstackDirectory.path])
+            .currentStatus().state == .stopped, "orbstack parado = desligado")
     }
 
     /// Sonda read-only de runtime com binarios simulados (passo 1 do roadmap).
