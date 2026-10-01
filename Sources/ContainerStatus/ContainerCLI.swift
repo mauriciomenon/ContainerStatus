@@ -205,8 +205,8 @@ final class ContainerCLI: Sendable {
     }
 
     /// Contagem de containers rodando (`container ls --format json` lista os
-    /// ativos por padrao). nil quando a CLI nao responde - a linha de status
-    /// fica sem sufixo em vez de mentir. Read-only, watchdog do status.
+    /// ativos por padrao). nil quando a CLI nao responde - quem exibe mantem
+    /// a ultima contagem conhecida. Read-only, watchdog do status.
     func containerCount() -> Int? {
         refreshBinaryPathIfNeeded()
         guard resolvedBinaryPath != nil else { return nil }

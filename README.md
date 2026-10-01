@@ -172,7 +172,7 @@ dimensoes explicitas de bitmap e independe da escala da tela.
 `--selftest` executa 70 checagens do nucleo: estados, watchdog, parada
 lenta, descoberta da CLI, cache e concorrencia durante upgrades, sondas
 de runtimes externos e controle com stubs stateful.
-`--selftest-ui` inclui mais 28 checagens de menu: insercao, atualizacao e
+`--selftest-ui` inclui mais 31 checagens de menu: insercao, atualizacao e
 remocao da linha de erro, retencao de erro local de toggle apos polls
 saudaveis, substituicao por diagnostico do polling, ordem de checagens em
 voo (sequencia e epoca de mutacao), insercao com anchor degradado, ciclo
