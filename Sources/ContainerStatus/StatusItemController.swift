@@ -483,9 +483,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "recuperacao no polling remove erro")
 
         // Checagens em voo fora de ordem: um resultado antigo (sequence menor
-        // que o ultimo aplicado) nao sobrescreve o estado recente. O poll
-        // periodico usa Int.max, entao passa pelo guard de ordem; o que o
-        // segura e a epoca de mutacao (ver abaixo).
+        // que o ultimo aplicado) nao sobrescreve o estado recente. O teste
+        // exercita o guard de ordem com sequencias explicitas; o poll real
+        // (timer e menu) usa o contador compartilhado nextSequence().
         controller.absorb(poll: (.notInstalled, "checagem antiga"), sequence: 1)
         expect(controller.state == .running && controller.errorItem.menu == nil,
                "poll antigo fora de ordem e descartado")
@@ -494,8 +494,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "poll novo em sequencia correta aplica")
 
         // Barreira de epoca: uma leitura que comecou ANTES de finish() nao
-        // pode aterrissar depois da mutacao com estado de meio-caminho, mesmo
-        // sendo o poll periodico (sequence Int.max).
+        // pode aterrissar depois da mutacao com estado de meio-caminho,
+        // mesmo com sequence alto (a leitura de epoca antiga e descartada
+        // antes do guard de ordem).
         let epochBefore = controller.mutationEpoch
         controller.finish(result: CLIRunResult(exitCode: 0, spawned: true), poll: (.running, nil))
         controller.absorb(poll: (.stopped, nil), sequence: Int.max, epoch: epochBefore)
@@ -646,6 +647,23 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         expect(toggleController.runtimeStates["Colima"] == .running,
                "start com subida atrasada converge para ligado no retry")
+
+        // Lado complementar da leitura fresca: menu velho diz Ligado, a
+        // maquina real esta parada; o clique LIGA (verdade da maquina vence
+        // o rotulo velho, que o poll seguinte corrige). O stub "delayed"
+        // starta com exit 0 e a leitura fresca ve parado.
+        try? FileManager.default.removeItem(at: toggleDirectory.appendingPathComponent("colima.state"))
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .running], sequence: 5)
+        expect(toggleRow().title == "Colima: Ligado",
+               "menu velho mostra ligado enquanto a planta esta parada")
+        toggleController.runtimeToggled(toggleRow())
+        var staleOnDeadline = Date().addingTimeInterval(8)
+        while Date() < staleOnDeadline && toggleController.runtimeActivity["Colima"] == true {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(toggleController.runtimeStates["Colima"] == .running
+               && toggleController.errorItem.menu == nil,
+               "toggle com menu velho ligado inicia o runtime parado")
 
         // Poll periodico vivo: o estado acompanha os flips da CLI por
         // multiplos ciclos. Regressao do P1 da revisao dev: a sentinela
