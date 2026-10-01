@@ -374,13 +374,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
               let probe = runtimes.first(where: { $0.label == label }),
               probe.isControllable,
               runtimeActivity[label] != true else { return }
-        let turningOff = (runtimeStates[label] == .running)
         runtimeActivity[label] = true
         detail = nil
         detailIsLocal = false
         apply()
 
         Task.detached(priority: .userInitiated) { [weak self] in
+            // O estado do menu pode estar ate 3s velho; a direcao do toggle
+            // vem de uma leitura fresca, no momento do clique.
+            let fresh = probe.currentStatus().state
+            let turningOff = fresh == .running
             let result = turningOff ? probe.stop() : probe.start()
             let state = probe.currentStatus().state
             await MainActor.run { [weak self] in
@@ -568,6 +571,33 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 2)
         expect(toggleController.errorItem.title.hasPrefix("Colima:"),
                "erro local de runtime sobrevive a poll saudavel")
+
+        // Direcao do toggle vem de leitura fresca: o menu (velho) diz
+        // Desligado, mas a maquina real esta rodando; start em runtime vivo
+        // falharia, entao o toggle correto e o stop.
+        let staleScript = """
+        #!/bin/sh
+        case "$1" in
+          start) if [ -f "$0.state" ]; then echo "ja rodando" >&2; exit 1; fi
+                 touch "$0.state"; exit 0 ;;
+          stop) rm -f "$0.state"; exit 0 ;;
+          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
+        esac
+        """
+        let stalePath = toggleDirectory.appendingPathComponent("colima").path
+        try? staleScript.write(toFile: stalePath, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stalePath)
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 3)
+        expect(toggleRow().title == "Colima: Desligado",
+               "menu velho mostra desligado enquanto a planta roda")
+        toggleController.runtimeToggled(toggleRow())
+        var freshDeadline = Date().addingTimeInterval(5)
+        while Date() < freshDeadline && toggleController.runtimeActivity["Colima"] == true {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(toggleController.runtimeStates["Colima"] == .stopped
+               && toggleController.errorItem.menu == nil,
+               "toggle decide a direcao por leitura fresca, nao pelo menu velho")
     }
 
     // MARK: Launch at login
