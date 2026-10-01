@@ -34,11 +34,15 @@ struct RuntimeProbeConfig: Sendable {
     /// Contagem de containers ativos do runtime (`ps -q` = uma linha por
     /// container); nil desativa. So faz sentido com o runtime de pe.
     let countArguments: [String]?
+    /// Rodar a sonda a cada N ciclos de poll (1 = todo ciclo). Para CLIs
+    /// caras: lume ls custa ~0.9s por chamada, as outras ficam em centesimos.
+    let pollEvery: Int
 
     init(label: String, binaryName: String, statusArguments: [String],
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
          control: RuntimeControl? = nil, info: RuntimeInfo? = nil,
-         autoStartPatterns: [String] = [], countArguments: [String]? = nil) {
+         autoStartPatterns: [String] = [], countArguments: [String]? = nil,
+         pollEvery: Int = 1) {
         self.label = label
         self.binaryName = binaryName
         self.statusArguments = statusArguments
@@ -47,6 +51,7 @@ struct RuntimeProbeConfig: Sendable {
         self.info = info
         self.autoStartPatterns = autoStartPatterns
         self.countArguments = countArguments
+        self.pollEvery = max(1, pollEvery)
     }
 
     /// Consulta informativa de planta: comando + rotulo do que ele responde.
@@ -125,7 +130,8 @@ extension RuntimeProbeConfig {
     static let lume = RuntimeProbeConfig(
         label: "Lume", binaryName: "lume", statusArguments: ["ls", "--format", "json"],
         interpret: { $0.spawned && $0.stdout.contains("\"running\"") ? .running : .stopped },
-        autoStartPatterns: ["homebrew.mxcl.lume"]
+        autoStartPatterns: ["homebrew.mxcl.lume"],
+        pollEvery: 5
     )
 
     /// `orbctl status` responde "Running" exit 0 quando o OrbStack esta de pe.

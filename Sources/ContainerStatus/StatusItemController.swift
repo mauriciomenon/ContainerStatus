@@ -359,6 +359,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             value += 1
             return value
         }
+    }
+
+    private let cycleLock = OSAllocatedUnfairLock(initialState: 0)
+
+    private func nextCycle() -> Int {
+        cycleLock.withLock { value in
+            value += 1
+            return value
+        }
     }    /// Barreira de mutacao: finish()/finishRuntime() avancam a epoca e toda
     /// leitura em voo iniciada antes da mutacao e descartada no absorb.
     private var mutationEpoch = 0
@@ -367,6 +376,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// so aceita leituras da epoca corrente.
     private func spawnPoll(sequence: Int) {
         let epoch = mutationEpoch
+        let cycle = nextCycle()
         pollQueue.async { [cli, runtimes, vmnet, weak self] in
             let result = cli.checkStatus()
             // Uma chamada so alimenta contagem e lista do menu.
@@ -378,6 +388,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             var states: [String: ExternalRuntimeState] = [:]
             var info: [String: String] = [:]
             for probe in runtimes {
+                // Cadencia por sonda: caras (lume ~0.9s) rodam a cada N
+                // ciclos; quem nao vence mantem o ultimo estado no absorb.
+                if (cycle - 1) % probe.config.pollEvery != 0 { continue }
                 let (state, _) = probe.currentStatus()
                 states[probe.label] = state
                 if let tooltip = probe.tooltipInfo(state: state) {
@@ -414,10 +427,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             containerCount = containers.count
         }
         if let runtimes {
-            self.runtimeStates = runtimes
+            for (label, runtimeState) in runtimes {
+                self.runtimeStates[label] = runtimeState
+            }
         }
         if let info {
-            self.runtimeInfo = info
+            for (label, tooltip) in info {
+                self.runtimeInfo[label] = tooltip
+            }
         }
         lastAppliedSequence = sequence
         if activity == .none {
@@ -766,6 +783,26 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                                state: .running, vmCount: 1)
         expect(withFusion.errorItem.menu == nil && withFusion.detailIsLocal == false,
                "cancelar vmnet sai sem linha de erro")
+
+        // Cadencia por sonda (lume pollEvery=5): absorb faz merge por label,
+        // entao um ciclo que so amostrou uma sonda nao apaga as outras.
+        let cadence = StatusItemController(
+            cli: ContainerCLI(directories: []), runtimes: [],
+            vmnet: VmnetProbe(fusionAppPath: "/no/such/Fusion.app"))
+        cadence.item.isVisible = false
+        defer { NSStatusBar.system.removeStatusItem(cadence.item) }
+        cadence.absorb(poll: (.running, nil),
+                       runtimes: ["Colima": .running, "Docker": .stopped],
+                       sequence: 1)
+        cadence.absorb(poll: (.running, nil),
+                       runtimes: ["Docker": .running],
+                       sequence: 2)
+        expect(cadence.runtimeStates["Colima"] == .running
+               && cadence.runtimeStates["Docker"] == .running,
+               "absorb faz merge e nao apaga sondas fora do ciclo")
+        expect(RuntimeProbeConfig.lume.pollEvery == 5
+               && RuntimeProbeConfig.colima.pollEvery == 1,
+               "cadencia: lume a cada 5 ciclos, resto a cada ciclo")
 
         // Linha read-only do colima: entra abaixo do Status quando o binario
         // existe e some quando ele desaparece (insert/remove em apply, regra 5).
