@@ -31,4 +31,5 @@ build/
 
 # Documentacao interna do projeto (nao publicar)
 docs/
+ROADMAP.md
 agents.md
