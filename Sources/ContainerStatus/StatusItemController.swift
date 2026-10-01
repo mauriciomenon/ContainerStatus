@@ -36,7 +36,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Containers rodando no Apple container (nil quando a CLI nao responde).
     private var containerCount: Int?
     /// Lista (id, memoria) exibida como linhas sob o Status; acompanha a
-    /// contagem (mesma chamada de poll). Teto de linhas: 8 + resumo.
+    /// contagem (mesma chamada de poll). Teto de 8 linhas - o estouro
+    /// aparece no sufixo "(N containers)" do Status.
     private var containerItems: [ContainerCLI.ContainerSummary] = []
     /// Rede virtual do VMware (vmnet): estado, VMs e subida em voo.
     private var vmnetState: VmnetState = .notInstalled
@@ -55,7 +56,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let headerItem = NSMenuItem()
     private let pathItem = NSMenuItem()
     private let statusLineItem = NSMenuItem()
-    /// Linhas dos containers de pe (pool reutilizado, teto 8 + resumo).
+    /// Linhas dos containers de pe (pool reutilizado, teto 8).
     private var containerRowItems: [NSMenuItem] = []
     /// Uma linha informativa por runtime, criada sob demanda em apply().
     private lazy var runtimeItems: [String: NSMenuItem] = Dictionary(
@@ -68,6 +69,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let loginItem = NSMenuItem()
     private let vmnetRowItem = NSMenuItem()
     private let vmnetActionItem = NSMenuItem()
+    /// O separador de cima e o que ja existe apos o login; so o de baixo
+    /// pertence ao bloco.
+    private let vmnetBottomSeparator = NSMenuItem.separator()
     private let quitItem = NSMenuItem()
 
     // MARK: Lifecycle
@@ -151,9 +155,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.addItem(actionItem)
         menu.addItem(loginItem)
         menu.addItem(.separator())
-        menu.addItem(vmnetRowItem)
-        menu.addItem(vmnetActionItem)
-        menu.addItem(.separator())
         menu.addItem(aboutAppleItem)
         menu.addItem(aboutItem)
         menu.addItem(quitItem)
@@ -231,12 +232,25 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
 
-        // Secao vmnet: so existe com Fusion instalado (regra 5 - remove/
-        // insert aqui, unico caminho). Sem opcao de desligar.
+        // Secao vmnet: bloco atomico (sep + linhas + sep) ancorado antes do
+        // Sobre Apple Container. So existe com Fusion instalado; remove/
+        // insert aqui, unico caminho (regra 5). Sem opcao de desligar.
+        let vmnetInSection = vmnetRowItem.menu != nil
         if vmnetState == .notInstalled {
-            if vmnetRowItem.menu != nil { menu.removeItem(vmnetRowItem) }
-            if vmnetActionItem.menu != nil { menu.removeItem(vmnetActionItem) }
+            if vmnetInSection {
+                for item in [vmnetRowItem, vmnetActionItem, vmnetBottomSeparator]
+                where item.menu != nil {
+                    menu.removeItem(item)
+                }
+            }
         } else {
+            if !vmnetInSection {
+                let anchor = menu.index(of: aboutAppleItem)
+                let base = anchor >= 0 ? anchor : menu.numberOfItems
+                menu.insertItem(vmnetRowItem, at: base)
+                menu.insertItem(vmnetActionItem, at: base + 1)
+                menu.insertItem(vmnetBottomSeparator, at: base + 2)
+            }
             var text = vmnetState == .running ? "VMware vmnet: Ativo" : "VMware vmnet: Parado"
             if vmCount > 0 {
                 text += vmCount == 1 ? " - 1 VM" : " - \(vmCount) VMs"
@@ -249,16 +263,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             } else {
                 vmnetActionItem.title = "Subir rede virtual (vmnet)"
                 vmnetActionItem.isEnabled = true
-            }
-            if vmnetRowItem.menu == nil || vmnetActionItem.menu == nil {
-                let anchor = menu.index(of: loginItem)
-                let base = anchor >= 0 ? anchor + 1 : menu.numberOfItems
-                if vmnetRowItem.menu == nil {
-                    menu.insertItem(vmnetRowItem, at: base)
-                }
-                if vmnetActionItem.menu == nil {
-                    menu.insertItem(vmnetActionItem, at: menu.index(of: vmnetRowItem) + 1)
-                }
             }
         }
 
@@ -525,7 +529,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Rede virtual (vmnet) - somente subir, nunca derrubar
 
     @objc private func vmnetClicked(_ sender: NSMenuItem) {
-        guard !vmnetBusy, vmnet.fusionInstalled else { return }
+        guard !vmnetBusy, activity == .none, vmnet.fusionInstalled else { return }
         vmnetBusy = true
         detail = nil
         detailIsLocal = false
@@ -695,6 +699,59 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.errorItem.menu === controller.menu
                && controller.menu.index(of: controller.errorItem) == controller.menu.numberOfItems - 1,
                "erro sem loginItem no menu insere no fim sem excecao")
+
+        // Secao vmnet (regra 5): sem Fusion, fora do menu e sem separadores
+        // consecutivos; com Fusion, bloco login | sep | linha | acao | sep |
+        // Sobre. Diretorio fake de Fusion com vmnet-cli executavel.
+        func hasConsecutiveSeparators(_ menu: NSMenu) -> Bool {
+            var previousWasSeparator = false
+            for item in menu.items {
+                let isSeparator = item.isSeparatorItem
+                if isSeparator && previousWasSeparator { return true }
+                previousWasSeparator = isSeparator
+            }
+            return false
+        }
+
+        let noFusion = StatusItemController(
+            cli: ContainerCLI(directories: []), runtimes: [],
+            vmnet: VmnetProbe(fusionAppPath: "/no/such/Fusion.app"))
+        noFusion.item.isVisible = false
+        defer { NSStatusBar.system.removeStatusItem(noFusion.item) }
+        expect(noFusion.vmnetRowItem.menu == nil && noFusion.vmnetActionItem.menu == nil,
+               "vmnet sem Fusion fica fora do menu")
+        expect(!hasConsecutiveSeparators(noFusion.menu),
+               "menu sem Fusion nao tem separadores consecutivos")
+
+        let fusionDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cs_fusion_\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: fusionDirectory.appendingPathComponent("Contents/Library"),
+            withIntermediateDirectories: true)
+        let cliPath = fusionDirectory.appendingPathComponent("Contents/Library/vmnet-cli").path
+        try? "#!/bin/sh\nexit 0".write(toFile: cliPath, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliPath)
+        let withFusion = StatusItemController(
+            cli: ContainerCLI(directories: []), runtimes: [],
+            vmnet: VmnetProbe(fusionAppPath: fusionDirectory.path))
+        withFusion.item.isVisible = false
+        defer { NSStatusBar.system.removeStatusItem(withFusion.item) }
+        withFusion.absorb(poll: (.running, nil), vmnet: (.running, 1), sequence: 1)
+        expect(withFusion.vmnetRowItem.menu != nil && withFusion.vmnetActionItem.menu != nil,
+               "vmnet com Fusion monta o bloco no menu")
+        expect(withFusion.vmnetRowItem.title == "VMware vmnet: Ativo - 1 VM"
+               && withFusion.vmnetActionItem.title == "Subir rede virtual (vmnet)"
+               && withFusion.vmnetActionItem.isEnabled,
+               "linhas do bloco vmnet com estado e acao")
+        let menu = withFusion.menu
+        expect(menu.index(of: withFusion.vmnetRowItem) == menu.index(of: withFusion.vmnetActionItem) - 1
+               && menu.index(of: withFusion.vmnetBottomSeparator) == menu.index(of: withFusion.vmnetActionItem) + 1,
+               "bloco vmnet fechado por separador proprio")
+        expect(!hasConsecutiveSeparators(menu),
+               "menu com Fusion nao tem separadores consecutivos")
+        withFusion.absorb(poll: (.running, nil), vmnet: (.notInstalled, 0), sequence: 2)
+        expect(withFusion.vmnetRowItem.menu == nil && !hasConsecutiveSeparators(menu),
+               "vmnet removido sai do menu sem separadores orfaos")
 
         // Linha read-only do colima: entra abaixo do Status quando o binario
         // existe e some quando ele desaparece (insert/remove em apply, regra 5).
