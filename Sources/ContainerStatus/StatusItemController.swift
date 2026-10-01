@@ -26,6 +26,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Estados read-only por runtime (passo 1 do roadmap multi-runtime),
     /// atualizados em absorb no main actor.
     private var runtimeStates: [String: ExternalRuntimeState] = [:]
+    /// Runtimes com toggle em voo (passo 2); a linha mostra "Alternando...".
+    private var runtimeActivity: [String: Bool] = [:]
     private var cliVersion: String?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
@@ -80,8 +82,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         headerItem.isEnabled = false
         statusLineItem.isEnabled = false
-        for item in runtimeItems.values {
+        for probe in runtimes {
+            guard let item = runtimeItems[probe.label] else { continue }
             item.isEnabled = false
+            item.target = self
+            item.action = #selector(runtimeToggled(_:))
+            item.representedObject = probe.label
         }
         actionItem.target = self
         actionItem.action = #selector(actionClicked(_:))
@@ -158,8 +164,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                     menu.removeItem(item)
                 }
             } else {
-                item.title = "\(probe.label): \(runtimeState == .running ? "Ligado" : "Desligado")"
-                item.isEnabled = false
+                if runtimeActivity[probe.label] == true {
+                    item.title = "\(probe.label): Alternando..."
+                    item.isEnabled = false
+                } else {
+                    item.title = "\(probe.label): \(runtimeState == .running ? "Ligado" : "Desligado")"
+                    // Passo 2: so e clicavel quem tem receita de controle.
+                    item.isEnabled = probe.isControllable
+                }
                 if item.menu == nil {
                     let anchor = menu.index(of: anchorItem)
                     menu.insertItem(item, at: anchor >= 0 ? anchor + 1 : menu.numberOfItems)
@@ -339,6 +351,47 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         apply()
     }
 
+    // MARK: Runtime toggles (passo 2)
+
+    @objc private func runtimeToggled(_ sender: NSMenuItem) {
+        guard let label = sender.representedObject as? String,
+              let probe = runtimes.first(where: { $0.label == label }),
+              probe.isControllable,
+              runtimeActivity[label] != true else { return }
+        let turningOff = (runtimeStates[label] == .running)
+        runtimeActivity[label] = true
+        detail = nil
+        detailIsLocal = false
+        apply()
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = turningOff ? probe.stop() : probe.start()
+            let state = probe.currentStatus().state
+            await MainActor.run { [weak self] in
+                self?.finishRuntime(label: label, result: result, state: state)
+            }
+        }
+    }
+
+    /// Mesmo contrato do finish() do Apple container: avanca a barreira de
+    /// epoca (polls em voo da era anterior sao descartados) e retenta o erro
+    /// local ate o proximo toggle ou um poll com detalhe proprio.
+    private func finishRuntime(label: String, result: CLIRunResult,
+                               state: ExternalRuntimeState) {
+        mutationEpoch += 1
+        runtimeActivity[label] = nil
+        runtimeStates[label] = state
+        if result.succeeded {
+            detail = nil
+            detailIsLocal = false
+        } else {
+            let message = ContainerCLI.firstLine(result.stderr)
+            detail = "\(label): \(message.isEmpty ? "Operacao falhou" : message)"
+            detailIsLocal = true
+        }
+        apply()
+    }
+
     // Regressao opcional de AppKit, sem iniciar polling ou executar a CLI real.
     static func checkMenuErrors(expect: (Bool, String) -> Void) {
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -439,6 +492,66 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(colimaController.menu.index(of: colimaRow()) == -1
                && colimaController.menu.numberOfItems == colimaCount,
                "colima removido tira a linha do menu")
+
+        // Passo 2: linha com receita de controle e clicavel; o toggle async
+        // (com estado simulado em arquivo) termina aplicando o novo estado.
+        let toggleDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cs_toggle_\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: toggleDirectory, withIntermediateDirectories: false)
+        let statefulScript = """
+        #!/bin/sh
+        case "$1" in
+          start) touch "$0.state"; exit 0 ;;
+          stop) rm -f "$0.state"; exit 0 ;;
+          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
+        esac
+        """
+        let statefulPath = toggleDirectory.appendingPathComponent("colima").path
+        try? statefulScript.write(toFile: statefulPath, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: statefulPath)
+        let toggleController = StatusItemController(
+            cli: ContainerCLI(directories: []),
+            runtimes: [RuntimeProbe(config: .colima, directories: [toggleDirectory.path])])
+        toggleController.item.isVisible = false
+        defer { NSStatusBar.system.removeStatusItem(toggleController.item) }
+        let toggleRow = { toggleController.runtimeItems["Colima"] ?? NSMenuItem() }
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 1)
+        expect(toggleRow().isEnabled == true, "linha com controle e clicavel")
+
+        toggleController.runtimeToggled(toggleRow())
+        expect(toggleRow().title == "Colima: Alternando..." && toggleRow().isEnabled == false,
+               "toggle em voo mostra Alternando e desabilita a linha")
+        var toggleDeadline = Date().addingTimeInterval(5)
+        while Date() < toggleDeadline && toggleController.runtimeStates["Colima"] != .running {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(toggleController.runtimeStates["Colima"] == .running
+               && toggleRow().title == "Colima: Ligado" && toggleRow().isEnabled == true,
+               "toggle bem-sucedido aplica o novo estado e reabilita a linha")
+
+        // Toggle falho: erro local com o rotulo do runtime, retido por detailIsLocal.
+        // O estado atual e Ligado (start acima), entao o toggle executa o stop.
+        let failingScript = """
+        #!/bin/sh
+        case "$1" in
+          stop) echo "falhou feio" >&2; exit 1 ;;
+          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
+        esac
+        """
+        let failingPath = toggleDirectory.appendingPathComponent("colima").path
+        try? failingScript.write(toFile: failingPath, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: failingPath)
+        toggleController.runtimeToggled(toggleRow())
+        toggleDeadline = Date().addingTimeInterval(5)
+        while Date() < toggleDeadline && toggleController.errorItem.menu == nil {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(toggleController.errorItem.title.hasPrefix("Colima:")
+               && toggleController.errorItem.menu === toggleController.menu,
+               "toggle falho mostra erro local com o rotulo do runtime")
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 2)
+        expect(toggleController.errorItem.title.hasPrefix("Colima:"),
+               "erro local de runtime sobrevive a poll saudavel")
     }
 
     // MARK: Launch at login
