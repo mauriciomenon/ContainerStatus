@@ -34,6 +34,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var runtimeInfo: [String: String] = [:]
     /// Containers rodando no Apple container (nil quando a CLI nao responde).
     private var containerCount: Int?
+    /// Lista (id, memoria) exibida como linhas sob o Status; acompanha a
+    /// contagem (mesma chamada de poll). Teto de linhas: 8 + resumo.
+    private var containerItems: [ContainerCLI.ContainerSummary] = []
     private var cliVersion: String?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
@@ -47,6 +50,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let headerItem = NSMenuItem()
     private let pathItem = NSMenuItem()
     private let statusLineItem = NSMenuItem()
+    /// Linhas dos containers de pe (pool reutilizado, teto 8 + resumo).
+    private var containerRowItems: [NSMenuItem] = []
+    private let containerOverflowItem = NSMenuItem()
     /// Uma linha informativa por runtime, criada sob demanda em apply().
     private lazy var runtimeItems: [String: NSMenuItem] = Dictionary(
         uniqueKeysWithValues: runtimes.map { ($0.label, NSMenuItem()) }
@@ -156,12 +162,35 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             menu.removeItem(errorItem)
         }
 
+        // Linhas dos containers de pe: id e memoria, logo abaixo do Status.
+        // Pool de itens reutilizado; remove/insert neste unico caminho (regra 5).
+        let visibleContainers = state == .running ? Array(containerItems.prefix(8)) : []
+        while containerRowItems.count > visibleContainers.count {
+            let row = containerRowItems.removeLast()
+            if row.menu != nil { menu.removeItem(row) }
+        }
+        for (index, container) in visibleContainers.enumerated() {
+            if index == containerRowItems.count {
+                let row = NSMenuItem()
+                row.isEnabled = false
+                containerRowItems.append(row)
+            }
+            let row = containerRowItems[index]
+            row.title = container.memoryBytes.map {
+                "\(container.id) - \($0 / 1_048_576) MB"
+            } ?? container.id
+            if row.menu == nil {
+                let anchor = menu.index(of: statusLineItem)
+                menu.insertItem(row, at: anchor >= 0 ? anchor + 1 + index : menu.numberOfItems)
+            }
+        }
+
         // Linhas informativas dos runtimes (passo 1 do roadmap): entram
-        // abaixo do Status em ordem fixa e somem quando o binario nao existe.
-        // Insert/remove sincronizados neste unico caminho (regra 5). O anchor
-        // de cada linha e o item anterior PRESENTE no menu, para nao depender
-        // de quem esta instalado.
-        var anchorItem = statusLineItem
+        // abaixo das linhas de container em ordem fixa e somem quando o
+        // binario nao existe. Insert/remove sincronizados neste unico
+        // caminho (regra 5). O anchor de cada linha e o item anterior
+        // PRESENTE no menu, para nao depender de quem esta instalado.
+        var anchorItem = containerRowItems.last.flatMap { $0.menu != nil ? $0 : nil } ?? statusLineItem
         for probe in runtimes {
             let item = runtimeItems[probe.label] ?? NSMenuItem()
             let runtimeState = runtimeStates[probe.label] ?? .notInstalled
@@ -287,7 +316,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let epoch = mutationEpoch
         pollQueue.async { [cli, runtimes, weak self] in
             let result = cli.checkStatus()
-            let count = cli.containerCount()
+            // Uma chamada so alimenta contagem e lista do menu.
+            let containers = cli.runningContainers()
             // Sondas read-only em serie no pollQueue: cada uma com watchdog
             // proprio de 2s (pior caso por sonda travada ~5.5s com kill e
             // teto de IO; nominal < 1s para as 3 CLIs reais). Quem nao esta
@@ -302,7 +332,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 }
             }
             Task { @MainActor [weak self] in
-                self?.absorb(poll: result, count: count, runtimes: states, info: info,
+                self?.absorb(poll: result, containers: containers, runtimes: states, info: info,
                              sequence: sequence, epoch: epoch)
             }
         }
@@ -314,14 +344,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     private func absorb(poll: (state: ServiceState, detail: String?),
-                        count: Int? = nil,
+                        containers: [ContainerCLI.ContainerSummary]? = nil,
                         runtimes: [String: ExternalRuntimeState]? = nil,
                         info: [String: String]? = nil,
                         sequence: Int, epoch: Int = Int.max) {
         guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
-        if let count {
-            self.containerCount = count
+        if let containers {
+            containerItems = containers
+            containerCount = containers.count
         }
         if let runtimes {
             self.runtimeStates = runtimes
@@ -374,22 +405,23 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         Task.detached(priority: .userInitiated) {
             let result = turningOff ? cli.stop() : cli.start()
             let poll = cli.checkStatus()
-            // Contagem fresca junto: sem isso o status mostraria a carga do
-            // poll anterior por ate 3s apos o toggle.
-            let count = cli.containerCount()
+            // Contagem e lista frescas junto: sem isso o status mostraria a
+            // carga do poll anterior por ate 3s apos o toggle.
+            let containers = cli.runningContainers()
             await MainActor.run { [weak self] in
-                self?.finish(result: result, poll: poll, count: count)
+                self?.finish(result: result, poll: poll, containers: containers)
             }
         }
     }
 
     private func finish(result: CLIRunResult, poll: (state: ServiceState, detail: String?),
-                        count: Int? = nil) {
+                        containers: [ContainerCLI.ContainerSummary]? = nil) {
         mutationEpoch += 1
         activity = .none
         state = poll.state
-        if let count {
-            self.containerCount = count
+        if let containers {
+            containerItems = containers
+            containerCount = containers.count
         }
         if result.succeeded {
             detail = poll.detail
@@ -484,18 +516,34 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // Sufixo de carga no Status: contagem fresca do toggle, singular e
         // plural; finish sem contagem mantem a ultima.
+        let listTwo = [ContainerCLI.ContainerSummary(id: "web", memoryBytes: 2_147_483_648),
+                       ContainerCLI.ContainerSummary(id: "db", memoryBytes: nil)]
         controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
-                          poll: (.running, nil), count: 2)
+                          poll: (.running, nil), containers: listTwo)
         expect(controller.statusLineItem.title == "Status: Ligado (2 containers)",
                "status ligado mostra a contagem de containers")
+        let rows = controller.containerRowItems
+        expect(rows.count == 2 && rows[0].title == "web - 2048 MB" && rows[1].title == "db",
+               "linhas de container mostram id e memoria")
         controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
-                          poll: (.running, nil), count: 1)
+                          poll: (.running, nil),
+                          containers: [ContainerCLI.ContainerSummary(id: "a", memoryBytes: nil)])
         expect(controller.statusLineItem.title == "Status: Ligado (1 container)",
                "um container aparece no singular")
+        expect(controller.containerRowItems.count == 1,
+               "linhas de container acompanham a lista")
         controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
                           poll: (.running, nil))
         expect(controller.statusLineItem.title == "Status: Ligado (1 container)",
                "finish sem contagem mantem a ultima conhecida")
+        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "x"),
+                          poll: (.stopped, nil))
+        expect(controller.containerRowItems.isEmpty,
+               "servico parado esconde as linhas de container")
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
+                          poll: (.running, nil), containers: [])
+        expect(controller.containerRowItems.isEmpty,
+               "servico de pe sem carga nao tem linhas de container")
 
         controller.finish(result: CLIRunResult(exitCode: 1, spawned: true,
                                               stderr: "Falha ao iniciar\nDetalhe adicional"),

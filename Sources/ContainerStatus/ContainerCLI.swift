@@ -208,15 +208,31 @@ final class ContainerCLI: Sendable {
     /// ativos por padrao). nil quando a CLI nao responde - quem exibe mantem
     /// a ultima contagem conhecida. Read-only, watchdog do status.
     func containerCount() -> Int? {
+        runningContainers()?.count
+    }
+
+    /// Containers rodando com uso de memoria (do mesmo `ls --format json`).
+    /// nil quando a CLI nao responde; lista vazia = servico de pe sem carga.
+    struct ContainerSummary: Equatable, Sendable {
+        var id: String
+        var memoryBytes: Int64?
+    }
+
+    func runningContainers() -> [ContainerSummary]? {
         refreshBinaryPathIfNeeded()
         guard resolvedBinaryPath != nil else { return nil }
         let result = run(["ls", "--format", "json"], timeout: Self.statusTimeout)
         guard result.succeeded, result.spawned, !result.timedOut,
               let data = result.stdout.data(using: .utf8),
-              let list = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return nil
         }
-        return list.count
+        return list.map { entry in
+            let id = entry["id"] as? String ?? "?"
+            let memory = (entry["configuration"] as? [String: Any])?["resources"] as? [String: Any]
+            return ContainerSummary(id: id,
+                                    memoryBytes: memory?["memoryInBytes"] as? Int64)
+        }
     }
 
     // MARK: Process plumbing

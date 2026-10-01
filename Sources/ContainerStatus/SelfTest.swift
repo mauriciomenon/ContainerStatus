@@ -207,8 +207,13 @@ enum SelfTest {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
         }
         let countingCLI = ContainerCLI(directories: [countDirectory.path])
-        try writeContainerStub("[{\"id\":\"a\"},{\"id\":\"b\"}]", exitCode: 0)
+        try writeContainerStub("[{\"id\":\"a\",\"configuration\":{\"resources\":{\"memoryInBytes\":2147483648}}},{\"id\":\"b\"}]", exitCode: 0)
         expect(countingCLI.containerCount() == 2, "ls com dois containers = 2")
+        let summary = countingCLI.runningContainers() ?? []
+        expect(summary.count == 2 && summary[0].id == "a"
+               && summary[0].memoryBytes == 2_147_483_648
+               && summary[1].id == "b" && summary[1].memoryBytes == nil,
+               "ls parseia id e memoria por container")
         try writeContainerStub("[]", exitCode: 0)
         expect(countingCLI.containerCount() == 0, "ls vazio = 0")
         try writeContainerStub("erro", exitCode: 1)
