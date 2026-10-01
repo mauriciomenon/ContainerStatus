@@ -613,7 +613,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         toggleController.runtimeToggled(toggleRow())
         expect(toggleRow().title == "Colima: Alternando..." && toggleRow().isEnabled == false,
                "toggle em voo mostra Alternando e desabilita a linha")
-        var toggleDeadline = Date().addingTimeInterval(5)
+        let toggleDeadline = Date().addingTimeInterval(5)
         while Date() < toggleDeadline && toggleController.runtimeStates["Colima"] != .running {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
@@ -664,7 +664,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(toggleRow().title == "Colima: Desligado",
                "menu velho mostra desligado enquanto a planta roda")
         toggleController.runtimeToggled(toggleRow())
-        var freshDeadline = Date().addingTimeInterval(5)
+        let freshDeadline = Date().addingTimeInterval(5)
         while Date() < freshDeadline && toggleController.runtimeActivity["Colima"] == true {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
@@ -688,7 +688,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: delayedPath)
         toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 4)
         toggleController.runtimeToggled(toggleRow())
-        var retryDeadline = Date().addingTimeInterval(8)
+        let retryDeadline = Date().addingTimeInterval(8)
         while Date() < retryDeadline && toggleController.runtimeActivity["Colima"] == true {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
@@ -704,7 +704,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(toggleRow().title == "Colima: Ligado",
                "menu velho mostra ligado enquanto a planta esta parada")
         toggleController.runtimeToggled(toggleRow())
-        var staleOnDeadline = Date().addingTimeInterval(8)
+        let staleOnDeadline = Date().addingTimeInterval(8)
         while Date() < staleOnDeadline && toggleController.runtimeActivity["Colima"] == true {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
