@@ -305,6 +305,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 if let autoStart = probe.autoStartLabel() {
                     parts.append("auto-start: \(autoStart)")
                 }
+                if state == .running, let runningCount = probe.runningCount() {
+                    parts.append(runningCount == 1 ? "1 container" : "\(runningCount) containers")
+                }
                 if !parts.isEmpty {
                     info[probe.label] = parts.joined(separator: "; ")
                 }

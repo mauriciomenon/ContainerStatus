@@ -301,6 +301,22 @@ enum SelfTest {
         expect(colimaProbe.autoStartLabel() == nil,
                "runtime sem LaunchAgent nao marca auto-start")
 
+        // Contagem por runtime (ps -q = uma linha por container): docker com
+        // receita de contagem; colima sem receita nunca conta.
+        let dockerCountProbe = RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
+        try stub("docker", dockerDirectory, stdout: "id1\nid2\nid3", exitCode: 0)
+        expect(dockerCountProbe.runningCount() == 3,
+               "docker ps -q com tres ids = 3 containers")
+        try stub("docker", dockerDirectory, stdout: "", exitCode: 0)
+        expect(dockerCountProbe.runningCount() == 0,
+               "docker ps -q vazio = 0 containers")
+        try bare("docker", dockerDirectory, exitCode: 1)
+        expect(dockerCountProbe.runningCount() == nil,
+               "docker ps falho = nil")
+        let noCountProbe = RuntimeProbe(config: .colima, directories: [lumeDirectory.path])
+        expect(noCountProbe.runningCount() == nil,
+               "runtime sem receita de contagem nao conta")
+
         // OrbStack: orbctl status "Running" exit 0; erro = parado.
         let orbstackDirectory = temporary.appendingPathComponent("orbstack", isDirectory: true)
         try FileManager.default.createDirectory(at: orbstackDirectory, withIntermediateDirectories: false)

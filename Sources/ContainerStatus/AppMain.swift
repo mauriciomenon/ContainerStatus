@@ -40,6 +40,9 @@ struct AppMain {
                 if let autoStart = probe.autoStartLabel() {
                     parts.append("auto-start: \(autoStart)")
                 }
+                if runtimeState == .running, let runningCount = probe.runningCount() {
+                    parts.append(runningCount == 1 ? "1 container" : "\(runningCount) containers")
+                }
                 if !parts.isEmpty { line += " [\(parts.joined(separator: "; "))]" }
             }
             print(line)

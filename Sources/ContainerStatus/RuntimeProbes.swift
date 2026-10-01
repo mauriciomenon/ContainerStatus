@@ -31,11 +31,14 @@ struct RuntimeProbeConfig: Sendable {
     /// runtime - passo 3: dois runtimes subindo sozinhos no login e a
     /// classe de conflito classica. Primeiro padrao encontrado vira tooltip.
     let autoStartPatterns: [String]
+    /// Contagem de containers ativos do runtime (`ps -q` = uma linha por
+    /// container); nil desativa. So faz sentido com o runtime de pe.
+    let countArguments: [String]?
 
     init(label: String, binaryName: String, statusArguments: [String],
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
          control: RuntimeControl? = nil, info: RuntimeInfo? = nil,
-         autoStartPatterns: [String] = []) {
+         autoStartPatterns: [String] = [], countArguments: [String]? = nil) {
         self.label = label
         self.binaryName = binaryName
         self.statusArguments = statusArguments
@@ -43,6 +46,7 @@ struct RuntimeProbeConfig: Sendable {
         self.control = control
         self.info = info
         self.autoStartPatterns = autoStartPatterns
+        self.countArguments = countArguments
     }
 
     /// Consulta informativa de planta: comando + rotulo do que ele responde.
@@ -96,7 +100,8 @@ extension RuntimeProbeConfig {
     static let docker = RuntimeProbeConfig(
         label: "Docker", binaryName: "docker", statusArguments: ["info"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
-        info: RuntimeInfo(label: "contexto", arguments: ["context", "show"])
+        info: RuntimeInfo(label: "contexto", arguments: ["context", "show"]),
+        countArguments: ["ps", "-q"]
     )
 
     /// `podman machine list --format json` sai exit 0 mesmo sem VM; o estado
@@ -109,7 +114,8 @@ extension RuntimeProbeConfig {
         interpret: { $0.spawned && $0.stdout.contains("\"Running\"") ? .running : .stopped },
         control: .selfBinary(binaryName: "podman",
                              startArguments: ["machine", "start"], startTimeout: 180,
-                             stopArguments: ["machine", "stop"], stopTimeout: 120)
+                             stopArguments: ["machine", "stop"], stopTimeout: 120),
+        countArguments: ["ps", "-q"]
     )
 
     /// `lume ls --format json` lista as VMs com campo de estado; exit 0
@@ -234,5 +240,17 @@ final class RuntimeProbe: Sendable {
             }
         }
         return nil
+    }
+
+    /// Containers ativos do runtime: uma linha por container em `ps -q`.
+    /// nil quando a receita nao existe ou o comando falhou.
+    func runningCount() -> Int? {
+        guard let arguments = config.countArguments, let path = resolvedPath() else {
+            return nil
+        }
+        let result = ContainerCLI.runBinary(path, arguments: arguments,
+                                            timeout: Self.statusTimeout)
+        guard result.succeeded, result.spawned, !result.timedOut else { return nil }
+        return result.stdout.split(separator: "\n", omittingEmptySubsequences: true).count
     }
 }
