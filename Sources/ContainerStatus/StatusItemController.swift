@@ -328,7 +328,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if lumeState != .notInstalled {
             lumeRowItem.title = "Lume: \(lumeState == .running ? "Running" : "Not Running")"
             lumeRowItem.toolTip = lumeProbe.flatMap { $0.tooltipInfo(state: lumeState) }
+            lumeRowItem.isEnabled = false
             lumeDetectItem.title = "Detected"
+            lumeDetectItem.isEnabled = false
             place(lumeDetectItem, present: true)
         } else {
             place(lumeDetectItem, present: false)
