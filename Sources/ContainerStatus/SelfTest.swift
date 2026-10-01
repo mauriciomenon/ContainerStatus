@@ -259,6 +259,21 @@ enum SelfTest {
         expect(RuntimeProbe(config: .lume, directories: [lumeDirectory.path])
             .currentStatus().state == .stopped, "lume sem VMs = desligado")
 
+        // Auto-start (passo 3): LaunchAgent presente marca o runtime; ausente
+        // = nil. Diretorio injetavel para teste deterministico.
+        let agentsDirectory = temporary.appendingPathComponent("LaunchAgents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agentsDirectory, withIntermediateDirectories: false)
+        try "dict".write(toFile: agentsDirectory.appendingPathComponent("homebrew.mxcl.lume.plist").path,
+                         atomically: true, encoding: .utf8)
+        let lumeProbe = RuntimeProbe(config: .lume, directories: [lumeDirectory.path],
+                                     launchAgentsDirectories: [agentsDirectory.path])
+        expect(lumeProbe.autoStartLabel() == "homebrew.mxcl.lume",
+               "auto-start do lume aparece pelo LaunchAgent")
+        let colimaProbe = RuntimeProbe(config: .colima, directories: [],
+                                       launchAgentsDirectories: [agentsDirectory.path])
+        expect(colimaProbe.autoStartLabel() == nil,
+               "runtime sem LaunchAgent nao marca auto-start")
+
         // OrbStack: orbctl status "Running" exit 0; erro = parado.
         let orbstackDirectory = temporary.appendingPathComponent("orbstack", isDirectory: true)
         try FileManager.default.createDirectory(at: orbstackDirectory, withIntermediateDirectories: false)

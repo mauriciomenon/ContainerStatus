@@ -286,8 +286,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             for probe in runtimes {
                 let (state, _) = probe.currentStatus()
                 states[probe.label] = state
-                if state != .notInstalled, let runtimeInfo = probe.currentInfo() {
-                    info[probe.label] = runtimeInfo
+                guard state != .notInstalled else { continue }
+                var parts: [String] = []
+                if let runtimeInfo = probe.currentInfo() {
+                    parts.append(runtimeInfo)
+                }
+                if let autoStart = probe.autoStartLabel() {
+                    parts.append("auto-start: \(autoStart)")
+                }
+                if !parts.isEmpty {
+                    info[probe.label] = parts.joined(separator: "; ")
                 }
             }
             Task { @MainActor [weak self] in

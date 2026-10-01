@@ -27,23 +27,29 @@ struct RuntimeProbeConfig: Sendable {
     /// Sonda informativa read-only (passo 3 parcial): identifica o dono
     /// efetivo do runtime, ex. o contexto do docker. Vai para o tooltip.
     let info: RuntimeInfo?
+    /// Padroes de LaunchAgent (sem ".plist") que marcam auto-start do
+    /// runtime - passo 3: dois runtimes subindo sozinhos no login e a
+    /// classe de conflito classica. Primeiro padrao encontrado vira tooltip.
+    let autoStartPatterns: [String]
 
     init(label: String, binaryName: String, statusArguments: [String],
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
-         control: RuntimeControl? = nil, info: RuntimeInfo? = nil) {
+         control: RuntimeControl? = nil, info: RuntimeInfo? = nil,
+         autoStartPatterns: [String] = []) {
         self.label = label
         self.binaryName = binaryName
         self.statusArguments = statusArguments
         self.interpret = interpret
         self.control = control
         self.info = info
+        self.autoStartPatterns = autoStartPatterns
     }
-}
 
-/// Consulta informativa de planta: comando + rotulo do que ele responde.
-struct RuntimeInfo: Sendable {
-    let label: String
-    let arguments: [String]
+    /// Consulta informativa de planta: comando + rotulo do que ele responde.
+    struct RuntimeInfo: Sendable {
+        let label: String
+        let arguments: [String]
+    }
 }
 
 /// Par ligado/desligado de um runtime. Watchdogs cobrem o pior caso de
@@ -79,7 +85,8 @@ extension RuntimeProbeConfig {
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
         control: .selfBinary(binaryName: "colima",
                              startArguments: ["start"], startTimeout: 180,
-                             stopArguments: ["stop"], stopTimeout: 120)
+                             stopArguments: ["stop"], stopTimeout: 120),
+        autoStartPatterns: ["homebrew.mxcl.colima"]
     )
 
     /// `docker info` pergunta ao daemon, nao a CLI: CLI sem daemon responde
@@ -107,10 +114,12 @@ extension RuntimeProbeConfig {
 
     /// `lume ls --format json` lista as VMs com campo de estado; exit 0
     /// tambem quando nao ha VMs. Rodando = alguma VM "running". Read-only:
-    /// liga/desliga VM por nome, e o servidor vive em background.
+    /// liga/desliga VM por nome, e o servidor vive em background. O brew
+    /// services instala LaunchAgent de auto-start (planta desta maquina).
     static let lume = RuntimeProbeConfig(
         label: "Lume", binaryName: "lume", statusArguments: ["ls", "--format", "json"],
-        interpret: { $0.spawned && $0.stdout.contains("\"running\"") ? .running : .stopped }
+        interpret: { $0.spawned && $0.stdout.contains("\"running\"") ? .running : .stopped },
+        autoStartPatterns: ["homebrew.mxcl.lume"]
     )
 
     /// `orbctl status` responde "Running" exit 0 quando o OrbStack esta de pe.
@@ -132,10 +141,15 @@ final class RuntimeProbe: Sendable {
 
     let config: RuntimeProbeConfig
     private let directories: [String]
+    private let launchAgentsDirectories: [String]
 
-    init(config: RuntimeProbeConfig, directories: [String] = ContainerCLI.searchDirectories()) {
+    init(config: RuntimeProbeConfig,
+         directories: [String] = ContainerCLI.searchDirectories(),
+         launchAgentsDirectories: [String] = [NSHomeDirectory() + "/Library/LaunchAgents",
+                                              "/Library/LaunchAgents"]) {
         self.config = config
         self.directories = directories
+        self.launchAgentsDirectories = launchAgentsDirectories
     }
 
     var label: String { config.label }
@@ -205,5 +219,20 @@ final class RuntimeProbe: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard result.succeeded, !line.isEmpty else { return nil }
         return "\(info.label): \(line)"
+    }
+
+    /// LaunchAgent de auto-start presente (primeiro padrao encontrado), ou
+    /// nil. Read-only: existencia de arquivo, sem executar nada.
+    func autoStartLabel() -> String? {
+        for directory in launchAgentsDirectories {
+            for pattern in config.autoStartPatterns {
+                let path = URL(fileURLWithPath: directory)
+                    .appendingPathComponent("\(pattern).plist").path
+                if FileManager.default.fileExists(atPath: path) {
+                    return pattern
+                }
+            }
+        }
+        return nil
     }
 }

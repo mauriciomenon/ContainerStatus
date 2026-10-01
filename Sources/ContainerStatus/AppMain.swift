@@ -34,8 +34,13 @@ struct AppMain {
             case .stopped: label = "desligado"
             }
             var line = "\(probe.label): \(label)\(path.map { " (\($0))" } ?? "")"
-            if runtimeState != .notInstalled, let info = probe.currentInfo() {
-                line += " [\(info)]"
+            if runtimeState != .notInstalled {
+                var parts: [String] = []
+                if let info = probe.currentInfo() { parts.append(info) }
+                if let autoStart = probe.autoStartLabel() {
+                    parts.append("auto-start: \(autoStart)")
+                }
+                if !parts.isEmpty { line += " [\(parts.joined(separator: "; "))]" }
             }
             print(line)
         }
