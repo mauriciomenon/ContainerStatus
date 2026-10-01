@@ -16,11 +16,12 @@ Apple Container x.y.z            versao da CLI em uso
 /usr/local/bin/container         caminho resolvido; "destino via symlink"
                                  quando a instalacao e um link (ex.: brew)
 ─────────────────────────────
+Status: Ligado (2 containers)   contagem de containers rodando
 Status: Ligado / Desligado / Nao instalado
 Colima / Docker / Podman /      linha por runtime instalado; clicavel
 Lume / OrbStack: ...            onde ha controle (ROADMAP passo 2);
-                                tooltip mostra o contexto do docker e o
-                                auto-start por LaunchAgent
+                                tooltip mostra contexto do docker,
+                                auto-start por LaunchAgent e contagem
 Ligar daemon / Desligar daemon   sem a CLI, vira o link do projeto
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Abrir no login                   (SMAppService, sem permissoes extras)
@@ -168,10 +169,10 @@ dimensoes explicitas de bitmap e independe da escala da tela.
 
 ## Testes focados
 
-`--selftest` executa 61 checagens do nucleo: estados, watchdog, parada
+`--selftest` executa 70 checagens do nucleo: estados, watchdog, parada
 lenta, descoberta da CLI, cache e concorrencia durante upgrades, sondas
 de runtimes externos e controle com stubs stateful.
-`--selftest-ui` inclui mais 26 checagens de menu: insercao, atualizacao e
+`--selftest-ui` inclui mais 28 checagens de menu: insercao, atualizacao e
 remocao da linha de erro, retencao de erro local de toggle apos polls
 saudaveis, substituicao por diagnostico do polling, ordem de checagens em
 voo (sequencia e epoca de mutacao), insercao com anchor degradado, ciclo
