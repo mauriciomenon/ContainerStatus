@@ -17,11 +17,14 @@ Apple Container x.y.z            versao da CLI em uso
                                  quando a instalacao e um link (ex.: brew)
 -----------------------------
 Status: Ligado (2 containers)   contagem de containers rodando
+web - 2048 MB                   containers de pe (ate 8, id e memoria)
 Status: Ligado / Desligado / Nao instalado
 Colima / Docker / Podman /      linha por runtime instalado; clicavel
 Lume / OrbStack: ...            onde ha controle (ROADMAP passo 2);
                                 tooltip mostra contexto do docker,
                                 auto-start por LaunchAgent e contagem
+VMware vmnet: Ativo - 1 VM      so com Fusion instalado
+Subir rede virtual (vmnet)       pede senha de admin; nao ha desligar
 Ligar daemon / Desligar daemon   sem a CLI, vira o link do projeto
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Abrir no login                   (SMAppService, sem permissoes extras)
@@ -169,10 +172,10 @@ dimensoes explicitas de bitmap e independe da escala da tela.
 
 ## Testes focados
 
-`--selftest` executa 70 checagens do nucleo: estados, watchdog, parada
+`--selftest` executa 75 checagens do nucleo: estados, watchdog, parada
 lenta, descoberta da CLI, cache e concorrencia durante upgrades, sondas
 de runtimes externos e controle com stubs stateful.
-`--selftest-ui` inclui mais 31 checagens de menu: insercao, atualizacao e
+`--selftest-ui` inclui mais 35 checagens de menu: insercao, atualizacao e
 remocao da linha de erro, retencao de erro local de toggle apos polls
 saudaveis, substituicao por diagnostico do polling, ordem de checagens em
 voo (sequencia e epoca de mutacao), insercao com anchor degradado, ciclo
