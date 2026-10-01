@@ -33,7 +33,11 @@ struct AppMain {
             case .running: label = "ligado"
             case .stopped: label = "desligado"
             }
-            print("\(probe.label): \(label)\(path.map { " (\($0))" } ?? "")")
+            var line = "\(probe.label): \(label)\(path.map { " (\($0))" } ?? "")"
+            if runtimeState != .notInstalled, let info = probe.currentInfo() {
+                line += " [\(info)]"
+            }
+            print(line)
         }
         exit(0)
     }

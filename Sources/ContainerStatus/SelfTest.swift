@@ -226,6 +226,17 @@ enum SelfTest {
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
             .currentStatus().state == .stopped, "docker sem daemon = desligado")
 
+        // Informacao de planta (passo 3 parcial): contexto do docker via
+        // sonda read-only; falha de comando = nil.
+        try stub("docker", dockerDirectory, stdout: "orbstack", exitCode: 0)
+        expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
+            .currentInfo() == "contexto: orbstack",
+               "sonda informativa le o contexto do docker")
+        try bare("docker", dockerDirectory, exitCode: 1)
+        expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
+            .currentInfo() == nil,
+               "sonda informativa falha sem exit 0")
+
         // Podman: JSON de machine list com maquina Running.
         let podmanDirectory = temporary.appendingPathComponent("podman", isDirectory: true)
         try FileManager.default.createDirectory(at: podmanDirectory, withIntermediateDirectories: false)

@@ -24,16 +24,26 @@ struct RuntimeProbeConfig: Sendable {
     /// docker tem o daemon dono do socket (o provider e quem manda) e lume
     /// liga/desliga VM por nome, nao servico.
     let control: RuntimeControl?
+    /// Sonda informativa read-only (passo 3 parcial): identifica o dono
+    /// efetivo do runtime, ex. o contexto do docker. Vai para o tooltip.
+    let info: RuntimeInfo?
 
     init(label: String, binaryName: String, statusArguments: [String],
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
-         control: RuntimeControl? = nil) {
+         control: RuntimeControl? = nil, info: RuntimeInfo? = nil) {
         self.label = label
         self.binaryName = binaryName
         self.statusArguments = statusArguments
         self.interpret = interpret
         self.control = control
+        self.info = info
     }
+}
+
+/// Consulta informativa de planta: comando + rotulo do que ele responde.
+struct RuntimeInfo: Sendable {
+    let label: String
+    let arguments: [String]
 }
 
 /// Par ligado/desligado de um runtime. Watchdogs cobrem o pior caso de
@@ -74,10 +84,12 @@ extension RuntimeProbeConfig {
 
     /// `docker info` pergunta ao daemon, nao a CLI: CLI sem daemon responde
     /// erro. Exit 0 = algum daemon de container esta respondendo. Read-only:
-    /// o daemon e do provider (passo 3 trata o socket).
+    /// o daemon e do provider (passo 3 trata o socket). O contexto aponta o
+    /// dono efetivo do daemon (ex.: orbstack).
     static let docker = RuntimeProbeConfig(
         label: "Docker", binaryName: "docker", statusArguments: ["info"],
-        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped }
+        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        info: RuntimeInfo(label: "contexto", arguments: ["context", "show"])
     )
 
     /// `podman machine list --format json` sai exit 0 mesmo sem VM; o estado
@@ -181,5 +193,17 @@ final class RuntimeProbe: Sendable {
 
     func stop() -> CLIRunResult {
         runControl((\.stopBinary, \.stopArguments, \.stopTimeout))
+    }
+
+    /// Informacao de planta (ex.: contexto do docker), ou nil quando o
+    /// runtime nao tem sonda informativa ou o comando falhou.
+    func currentInfo() -> String? {
+        guard let info = config.info, let path = resolvedPath() else { return nil }
+        let result = ContainerCLI.runBinary(path, arguments: info.arguments,
+                                            timeout: Self.statusTimeout)
+        let line = ContainerCLI.firstLine(result.stdout)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.succeeded, !line.isEmpty else { return nil }
+        return "\(info.label): \(line)"
     }
 }

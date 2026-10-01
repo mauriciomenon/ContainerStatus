@@ -28,6 +28,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var runtimeStates: [String: ExternalRuntimeState] = [:]
     /// Runtimes com toggle em voo (passo 2); a linha mostra "Alternando...".
     private var runtimeActivity: [String: Bool] = [:]
+    /// Informacao de planta por runtime (passo 3 parcial), ex. contexto do
+    /// docker; vai para o tooltip da linha.
+    private var runtimeInfo: [String: String] = [:]
     private var cliVersion: String?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
@@ -172,6 +175,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                     // Passo 2: so e clicavel quem tem receita de controle.
                     item.isEnabled = probe.isControllable
                 }
+                // Passo 3 parcial: dono efetivo (ex. contexto do docker).
+                item.toolTip = runtimeInfo[probe.label]
                 if item.menu == nil {
                     let anchor = menu.index(of: anchorItem)
                     menu.insertItem(item, at: anchor >= 0 ? anchor + 1 : menu.numberOfItems)
@@ -262,11 +267,18 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             let result = cli.checkStatus()
             // Sondas read-only em serie no pollQueue: cada uma com watchdog
             // proprio de 2s. Quem nao esta instalado custa so stat.
-            let states = Dictionary(uniqueKeysWithValues: runtimes.map {
-                ($0.label, $0.currentStatus().state)
-            })
+            var states: [String: ExternalRuntimeState] = [:]
+            var info: [String: String] = [:]
+            for probe in runtimes {
+                let (state, _) = probe.currentStatus()
+                states[probe.label] = state
+                if state != .notInstalled, let runtimeInfo = probe.currentInfo() {
+                    info[probe.label] = runtimeInfo
+                }
+            }
             Task { @MainActor [weak self] in
-                self?.absorb(poll: result, runtimes: states, sequence: sequence, epoch: epoch)
+                self?.absorb(poll: result, runtimes: states, info: info,
+                             sequence: sequence, epoch: epoch)
             }
         }
     }
@@ -279,11 +291,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     private func absorb(poll: (state: ServiceState, detail: String?),
                         runtimes: [String: ExternalRuntimeState]? = nil,
+                        info: [String: String]? = nil,
                         sequence: Int, epoch: Int = Int.max) {
         guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
         if let runtimes {
             self.runtimeStates = runtimes
+        }
+        if let info {
+            self.runtimeInfo = info
         }
         lastAppliedSequence = sequence
         if activity == .none {
