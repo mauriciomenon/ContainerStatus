@@ -37,12 +37,19 @@ struct RuntimeProbeConfig: Sendable {
     /// Rodar a sonda a cada N ciclos de poll (1 = todo ciclo). Para CLIs
     /// caras: lume ls custa ~0.9s por chamada, as outras ficam em centesimos.
     let pollEvery: Int
+    /// Caminho de app que marca a instalacao (ex.: /Applications/Docker.app).
+    /// Quando setado, "detectado" passa a ser existencia deste caminho, nao
+    /// do binario - providers de app (Docker Desktop, Rancher) sobrevivem ao
+    /// binario sumir do PATH.
+    let detectAppPath: String?
+    /// Natureza do servico, para o tooltip ("launchd service", "app + VM").
+    let nature: String
 
     init(label: String, binaryName: String, statusArguments: [String],
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
          control: RuntimeControl? = nil, info: RuntimeInfo? = nil,
          autoStartPatterns: [String] = [], countArguments: [String]? = nil,
-         pollEvery: Int = 1) {
+         pollEvery: Int = 1, detectAppPath: String? = nil, nature: String = "") {
         self.label = label
         self.binaryName = binaryName
         self.statusArguments = statusArguments
@@ -52,6 +59,8 @@ struct RuntimeProbeConfig: Sendable {
         self.autoStartPatterns = autoStartPatterns
         self.countArguments = countArguments
         self.pollEvery = max(1, pollEvery)
+        self.detectAppPath = detectAppPath
+        self.nature = nature
     }
 
     /// Consulta informativa de planta: comando + rotulo do que ele responde.
@@ -87,6 +96,11 @@ extension RuntimeProbeConfig {
     /// Ordem fixa de exibicao no menu; so aparece quem tiver binario.
     static let standard: [RuntimeProbeConfig] = [.colima, .docker, .podman, .lume, .orbstack]
 
+    /// Providers do mesmo backbone docker: so entram no menu quando
+    /// detectados. Cada um com toggle proprio quando e o dono do daemon.
+    static let dockerFamily: [RuntimeProbeConfig] =
+        [.orbstack, .colima, .dockerDesktop, .rancherDesktop, .finch]
+
     /// `colima status` responde exit 0 com a VM de pe. Start inicializa a VM
     /// (pode passar de minuto no primeiro boot).
     static let colima = RuntimeProbeConfig(
@@ -95,7 +109,8 @@ extension RuntimeProbeConfig {
         control: .selfBinary(binaryName: "colima",
                              startArguments: ["start"], startTimeout: 180,
                              stopArguments: ["stop"], stopTimeout: 120),
-        autoStartPatterns: ["homebrew.mxcl.colima"]
+        autoStartPatterns: ["homebrew.mxcl.colima"],
+        nature: "VM (Lima)"
     )
 
     /// `docker info` pergunta ao daemon, nao a CLI: CLI sem daemon responde
@@ -106,7 +121,8 @@ extension RuntimeProbeConfig {
         label: "Docker", binaryName: "docker", statusArguments: ["info"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
         info: RuntimeInfo(label: "contexto", arguments: ["context", "show"]),
-        countArguments: ["ps", "-q"]
+        countArguments: ["ps", "-q"],
+        nature: "daemon docker (dono no contexto)"
     )
 
     /// `podman machine list --format json` sai exit 0 mesmo sem VM; o estado
@@ -120,7 +136,8 @@ extension RuntimeProbeConfig {
         control: .selfBinary(binaryName: "podman",
                              startArguments: ["machine", "start"], startTimeout: 180,
                              stopArguments: ["machine", "stop"], stopTimeout: 120),
-        countArguments: ["ps", "-q"]
+        countArguments: ["ps", "-q"],
+        nature: "podman machine (VM)"
     )
 
     /// `lume ls --format json` lista as VMs com campo de estado; exit 0
@@ -131,7 +148,45 @@ extension RuntimeProbeConfig {
         label: "Lume", binaryName: "lume", statusArguments: ["ls", "--format", "json"],
         interpret: { $0.spawned && $0.stdout.contains("\"running\"") ? .running : .stopped },
         autoStartPatterns: ["homebrew.mxcl.lume"],
-        pollEvery: 5
+        pollEvery: 5,
+        nature: "LaunchAgent homebrew.mxcl.lume"
+    )
+
+    /// Docker Desktop: presenca pelo app; status pelo processo; toggle dele
+    /// mesmo, porque quando instalado E o dono do daemon docker.
+    static let dockerDesktop = RuntimeProbeConfig(
+        label: "Docker Desktop", binaryName: "/usr/bin/pgrep",
+        statusArguments: ["-x", "Docker"],
+        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        control: RuntimeControl(
+            startBinary: "/usr/bin/open", startArguments: ["-a", "Docker"],
+            startTimeout: 60,
+            stopBinary: "/usr/bin/osascript",
+            stopArguments: ["-e", "quit app \"Docker\""], stopTimeout: 60),
+        detectAppPath: "/Applications/Docker.app",
+        nature: "app Docker Desktop + daemon proprio"
+    )
+
+    /// Rancher Desktop (SUSE): app + VM com daemon docker proprio.
+    static let rancherDesktop = RuntimeProbeConfig(
+        label: "Rancher Desktop", binaryName: "/usr/bin/pgrep",
+        statusArguments: ["-x", "Rancher Desktop"],
+        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        control: RuntimeControl(
+            startBinary: "/usr/bin/open",
+            startArguments: ["-a", "Rancher Desktop"], startTimeout: 60,
+            stopBinary: "/usr/bin/osascript",
+            stopArguments: ["-e", "quit app \"Rancher Desktop\""], stopTimeout: 60),
+        detectAppPath: "/Applications/Rancher Desktop.app",
+        nature: "app Rancher Desktop + VM (backbone docker)"
+    )
+
+    /// Finch (AWS, base Lima): CLI rara; exibido como detectado, sem toggle
+    /// verificado (vm start/stop varia por versao).
+    static let finch = RuntimeProbeConfig(
+        label: "Finch", binaryName: "finch", statusArguments: ["--version"],
+        interpret: { _ in .stopped },
+        nature: "CLI (base Lima)"
     )
 
     /// `orbctl status` responde "Running" exit 0 quando o OrbStack esta de pe.
@@ -142,7 +197,8 @@ extension RuntimeProbeConfig {
         control: RuntimeControl(
             startBinary: "/usr/bin/open", startArguments: ["-a", "OrbStack"],
             startTimeout: 30,
-            stopBinary: "orbctl", stopArguments: ["stop"], stopTimeout: 120)
+            stopBinary: "orbctl", stopArguments: ["stop"], stopTimeout: 120),
+        nature: "app OrbStack + VM (backbone docker)"
     )
 }
 
@@ -235,9 +291,20 @@ final class RuntimeProbe: Sendable {
 
     var label: String { config.label }
 
-    /// Binario com maior prioridade, ou nil quando nao instalado.
+    /// Binario com maior prioridade, ou nil quando nao instalado. Com
+    /// detectAppPath, a existencia do app e que decide.
     func resolvedPath() -> String? {
-        directories.compactMap { directory in
+        if let appPath = config.detectAppPath {
+            return FileManager.default.fileExists(atPath: appPath)
+                ? (FileManager.default.isExecutableFile(atPath: config.binaryName)
+                   ? config.binaryName : nil)
+                : nil
+        }
+        if config.binaryName.hasPrefix("/") {
+            return FileManager.default.isExecutableFile(atPath: config.binaryName)
+                ? config.binaryName : nil
+        }
+        return directories.compactMap { directory in
             let candidate = URL(fileURLWithPath: directory)
                 .appendingPathComponent(config.binaryName).path
             return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
@@ -336,6 +403,9 @@ final class RuntimeProbe: Sendable {
     func tooltipInfo(state: ExternalRuntimeState) -> String? {
         guard state != .notInstalled else { return nil }
         var parts: [String] = []
+        if !config.nature.isEmpty {
+            parts.append(config.nature)
+        }
         if let runtimeInfo = currentInfo() {
             parts.append(runtimeInfo)
         }

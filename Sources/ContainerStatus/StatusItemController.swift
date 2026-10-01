@@ -58,25 +58,39 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // Menu items, kept as references so state changes mutate them in place.
     private let headerItem = NSMenuItem()
+    private let loginItem = NSMenuItem()
+    // Bloco Apple Container
+    private let appleRowItem = NSMenuItem()
     private let pathItem = NSMenuItem()
     private let statusLineItem = NSMenuItem()
     /// Linhas dos containers de pe (pool reutilizado, teto 8).
     private var containerRowItems: [NSMenuItem] = []
-    /// Uma linha informativa por runtime, criada sob demanda em apply().
-    private lazy var runtimeItems: [String: NSMenuItem] = Dictionary(
-        uniqueKeysWithValues: runtimes.map { ($0.label, NSMenuItem()) }
-    )
     private let actionItem = NSMenuItem()
-    private let errorItem = NSMenuItem()
-    private let aboutAppleItem = NSMenuItem()
-    private let aboutItem = NSMenuItem()
-    private let loginItem = NSMenuItem()
+    private let githubItem = NSMenuItem()
+    // Bloco Docker: daemon (sem toggle) + familia indentada (so detectados)
+    private let dockerRowItem = NSMenuItem()
+    private let dockerDetectItem = NSMenuItem()
+    private lazy var subStatusItems: [String: NSMenuItem] = Dictionary(
+        uniqueKeysWithValues: RuntimeProbeConfig.dockerFamily.map { ($0.label, NSMenuItem()) }
+    )
+    private lazy var subActionItems: [String: NSMenuItem] = Dictionary(
+        uniqueKeysWithValues: RuntimeProbeConfig.dockerFamily.map { ($0.label, NSMenuItem()) }
+    )
+    // Blocos individuais
+    private let podmanRowItem = NSMenuItem()
+    private let podmanActionItem = NSMenuItem()
+    private let lumeRowItem = NSMenuItem()
+    private let lumeDetectItem = NSMenuItem()
     private let vmnetRowItem = NSMenuItem()
     private let vmnetActionItem = NSMenuItem()
-    /// O separador de cima e o que ja existe apos o login; so o de baixo
-    /// pertence ao bloco.
-    private let vmnetBottomSeparator = NSMenuItem.separator()
+    private let errorItem = NSMenuItem()
+    private let aboutItem = NSMenuItem()
     private let quitItem = NSMenuItem()
+    private let sepDocker = NSMenuItem.separator()
+    private let sepPodman = NSMenuItem.separator()
+    private let sepLume = NSMenuItem.separator()
+    private let sepVmnet = NSMenuItem.separator()
+    private let tailSep = NSMenuItem.separator()
 
     // MARK: Lifecycle
 
@@ -108,39 +122,97 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.autoenablesItems = false
         menu.delegate = self
 
-        headerItem.isEnabled = false
+        // Cabecalho clicavel: varedura completa de deteccao (⟳).
+        headerItem.isEnabled = true
+        headerItem.target = self
+        headerItem.action = #selector(headerClicked(_:))
+
+        appleRowItem.isEnabled = false
         statusLineItem.isEnabled = false
+        actionItem.target = self
+        actionItem.action = #selector(actionClicked(_:))
+        githubItem.title = "GitHub"
+        githubItem.target = self
+        githubItem.action = #selector(openAppleAbout(_:))
+        dockerRowItem.isEnabled = false
+        dockerDetectItem.isEnabled = false
+        for probe in runtimes {
+            guard let row = subStatusItems[probe.label] else { continue }
+            row.isEnabled = false
+            row.indentationLevel = 1
+            row.action = #selector(runtimeToggled(_:))
+            row.target = self
+            row.representedObject = probe.label
+            if let action = subActionItems[probe.label] {
+                action.indentationLevel = 1
+                action.target = self
+                action.action = #selector(runtimeToggled(_:))
+                action.representedObject = probe.label
+            }
+        }
         vmnetRowItem.isEnabled = false
         vmnetActionItem.target = self
         vmnetActionItem.action = #selector(vmnetClicked(_:))
-        for probe in runtimes {
-            guard let item = runtimeItems[probe.label] else { continue }
-            item.isEnabled = false
-            item.target = self
-            item.action = #selector(runtimeToggled(_:))
-            item.representedObject = probe.label
-        }
-        actionItem.target = self
-        actionItem.action = #selector(actionClicked(_:))
         errorItem.isEnabled = false
-        aboutAppleItem.title = "Sobre Apple Container"
-        aboutAppleItem.target = self
-        aboutAppleItem.action = #selector(openAppleAbout(_:))
+        aboutItem.title = "About."
         aboutItem.target = self
         aboutItem.action = #selector(showAbout(_:))
-        loginItem.title = "Abrir no login"
+        loginItem.title = "Open at Login"
         loginItem.target = self
         loginItem.action = #selector(toggleLogin(_:))
 
-        quitItem.title = "Sair"
+        quitItem.title = "Quit"
         quitItem.action = #selector(NSApplication.terminate(_:))
 
         rebuildMenu()
     }
 
+    /// Esqueleto fixo: cabecalho, login, e a cauda About/Quit. Todo o resto
+    /// e zona dinamica que o apply() reconstrói em ordem canonica.
     private func rebuildMenu() {
         menu.removeAllItems()
         menu.addItem(headerItem)
+        menu.addItem(.separator())
+        menu.addItem(loginItem)
+        menu.addItem(tailSep)
+        menu.addItem(aboutItem)
+        menu.addItem(quitItem)
+        apply()
+    }
+
+    /// Refreshes menu text and the status icon from the current state.
+    /// A zona dinamica do menu e reconstruida aqui em ordem canonica: cada
+    /// bloco (Apple, Docker+familia, Podman, Lume, vmnet) entra apos o
+    /// ultimo item PRESENTE do anterior - remove/insert neste unico
+    /// caminho (regra 5).
+    private func apply() {
+        item.button?.image = Self.dotImage(state: state, dimmed: activity != .none)
+        headerItem.title = "Container Status \(appVersion ?? "") ⟳"
+        headerItem.toolTip = "Click to rescan detections"
+
+        var anchorItem = loginItem  // ultimo item fixo do cabecalho
+
+        func place(_ item: NSMenuItem, present: Bool) {
+            if present {
+                if item.menu == nil {
+                    let anchor = menu.index(of: anchorItem)
+                    menu.insertItem(item, at: anchor >= 0 ? anchor + 1 : menu.numberOfItems)
+                }
+                anchorItem = item
+            } else if item.menu != nil {
+                menu.removeItem(item)
+            }
+        }
+
+        if let detail, !detail.isEmpty {
+            errorItem.title = detail
+            place(errorItem, present: true)
+        } else {
+            place(errorItem, present: false)
+        }
+
+        // ---- Bloco Apple Container ----
+        place(appleRowItem, present: true)
         if let pathDisplay {
             // Long symlink chains break in two: resolved path on top,
             // "via <symlink>" underneath.
@@ -152,180 +224,173 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 .foregroundColor: NSColor.secondaryLabelColor,
             ])
             pathItem.isEnabled = false
-            menu.addItem(pathItem)
         }
-        menu.addItem(.separator())
-        menu.addItem(statusLineItem)
-        menu.addItem(actionItem)
-        menu.addItem(loginItem)
-        menu.addItem(.separator())
-        menu.addItem(aboutAppleItem)
-        menu.addItem(aboutItem)
-        menu.addItem(quitItem)
-        apply()
-    }
+        place(pathItem, present: pathDisplay != nil)
+        place(statusLineItem, present: true)
 
-    /// Refreshes menu text and the status icon from the current state.
-    private func apply() {
-        item.button?.image = Self.dotImage(state: state, dimmed: activity != .none)
-        if let detail, !detail.isEmpty {
-            errorItem.title = detail
-            if errorItem.menu == nil {
-                // Anchor fragil se a estrutura do menu mudar: index(of:)
-                // retorna -1 e insertItem(at: -1) levanta excecao. O erro
-                // entra no fim do menu como fallback seguro.
-                let anchor = menu.index(of: loginItem)
-                menu.insertItem(errorItem, at: anchor >= 0 ? anchor : menu.numberOfItems)
-            }
-        } else if errorItem.menu != nil {
-            menu.removeItem(errorItem)
-        }
-
-        // Linhas dos containers de pe: id e memoria, logo abaixo do Status.
-        // Pool de itens reutilizado; remove/insert neste unico caminho (regra 5).
+        // Linhas dos containers de pe: id e memoria. Pool reutilizado.
         let visibleContainers = state == .running ? Array(containerItems.prefix(8)) : []
-        while containerRowItems.count > visibleContainers.count {
-            let row = containerRowItems.removeLast()
-            if row.menu != nil { menu.removeItem(row) }
+        while containerRowItems.count < visibleContainers.count {
+            let row = NSMenuItem()
+            row.isEnabled = false
+            containerRowItems.append(row)
         }
         for (index, container) in visibleContainers.enumerated() {
-            if index == containerRowItems.count {
-                let row = NSMenuItem()
-                row.isEnabled = false
-                containerRowItems.append(row)
-            }
             let row = containerRowItems[index]
             row.title = container.memoryBytes.map {
                 "\(container.id) - \($0 / 1_048_576) MB"
             } ?? container.id
-            if row.menu == nil {
-                let anchor = menu.index(of: statusLineItem)
-                menu.insertItem(row, at: anchor >= 0 ? anchor + 1 + index : menu.numberOfItems)
-            }
+            place(row, present: true)
+        }
+        for row in containerRowItems.dropFirst(visibleContainers.count) {
+            place(row, present: false)
         }
 
-        // Linhas informativas dos runtimes (passo 1 do roadmap): entram
-        // abaixo das linhas de container em ordem fixa e somem quando o
-        // binario nao existe. Insert/remove sincronizados neste unico
-        // caminho (regra 5). O anchor de cada linha e o item anterior
-        // PRESENTE no menu, para nao depender de quem esta instalado.
-        var anchorItem = containerRowItems.last.flatMap { $0.menu != nil ? $0 : nil } ?? statusLineItem
-        for probe in runtimes {
-            let item = runtimeItems[probe.label] ?? NSMenuItem()
-            let runtimeState = runtimeStates[probe.label] ?? .notInstalled
-            if runtimeState == .notInstalled {
-                if item.menu != nil {
-                    menu.removeItem(item)
+        let actionLabel = activity != .none
+            ? "Working..."
+            : (state == .running ? "Disable Daemon" : "Enable Daemon")
+        actionItem.title = actionLabel
+        actionItem.isEnabled = activity == .none && state != .notInstalled
+        place(actionItem, present: state != .notInstalled)
+        place(githubItem, present: true)
+
+        // ---- Bloco Docker: daemon sem toggle + familia indentada ----
+        place(sepDocker, present: true)
+        place(dockerRowItem, present: true)
+        let dockerProbe = runtimes.first { $0.label == "Docker" }
+        let dockerState = runtimeStates["Docker"] ?? .notInstalled
+        dockerRowItem.title = "Docker: \(dockerState == .running ? "Running" : "Not Running")"
+        dockerRowItem.toolTip = dockerProbe.flatMap { $0.tooltipInfo(state: dockerState) }
+        dockerDetectItem.title = dockerState == .notInstalled ? "Not Detected" : "Detected"
+        place(dockerDetectItem, present: true)
+
+        for config in RuntimeProbeConfig.dockerFamily {
+            guard config.label != "Docker" else { continue }
+            let probe = runtimes.first { $0.label == config.label }
+            let subState = runtimeStates[config.label] ?? .notInstalled
+            guard let statusItem = subStatusItems[config.label],
+                  let actionItem = subActionItems[config.label] else { continue }
+            let detected = subState != .notInstalled
+            if detected {
+                statusItem.title = "\(config.label): \(subState == .running ? "Running" : "Not Running")"
+                statusItem.toolTip = probe?.tooltipInfo(state: subState)
+                statusItem.attributedTitle = NSAttributedString(
+                    string: statusItem.title,
+                    attributes: [.font: NSFont.menuFont(ofSize: 11),
+                                 .foregroundColor: NSColor.secondaryLabelColor])
+                statusItem.indentationLevel = 1
+                statusItem.isEnabled = false
+                place(statusItem, present: true)
+                if config.control != nil {
+                    if runtimeActivity[config.label] == true {
+                        actionItem.title = "Working..."
+                        actionItem.isEnabled = false
+                    } else {
+                        actionItem.title = subState == .running ? "Disable Daemon" : "Enable Daemon"
+                        actionItem.isEnabled = true
+                    }
+                    actionItem.indentationLevel = 1
+                    actionItem.attributedTitle = NSAttributedString(
+                        string: actionItem.title,
+                        attributes: [.font: NSFont.menuFont(ofSize: 11)])
+                    place(actionItem, present: true)
+                } else {
+                    place(actionItem, present: false)
                 }
             } else {
-                if runtimeActivity[probe.label] == true {
-                    item.title = "\(probe.label): Alternando..."
-                    item.isEnabled = false
-                } else {
-                    item.title = "\(probe.label): \(runtimeState == .running ? "Ligado" : "Desligado")"
-                    // Passo 2: so e clicavel quem tem receita de controle.
-                    item.isEnabled = probe.isControllable
-                }
-                // Passo 3 parcial: dono efetivo (ex. contexto do docker).
-                item.toolTip = runtimeInfo[probe.label]
-                if item.menu == nil {
-                    let anchor = menu.index(of: anchorItem)
-                    menu.insertItem(item, at: anchor >= 0 ? anchor + 1 : menu.numberOfItems)
-                }
-                anchorItem = item
+                place(statusItem, present: false)
+                place(actionItem, present: false)
             }
         }
 
-        // Secao vmnet: bloco atomico (sep + linhas + sep) ancorado antes do
-        // Sobre Apple Container. So existe com Fusion instalado; remove/
-        // insert aqui, unico caminho (regra 5). Sem opcao de desligar.
-        let vmnetInSection = vmnetRowItem.menu != nil
-        if vmnetState == .notInstalled {
-            if vmnetInSection {
-                for item in [vmnetRowItem, vmnetActionItem, vmnetBottomSeparator]
-                where item.menu != nil {
-                    menu.removeItem(item)
-                }
+        // ---- Podman (bloco proprio) ----
+        let podmanState = runtimeStates["Podman"] ?? .notInstalled
+        let podmanProbe = runtimes.first { $0.label == "Podman" }
+        place(sepPodman, present: podmanState != .notInstalled)
+        place(podmanRowItem, present: podmanState != .notInstalled)
+        if podmanState != .notInstalled {
+            podmanRowItem.title = "Podman: \(podmanState == .running ? "Running" : "Not Running")"
+            podmanRowItem.toolTip = podmanProbe.flatMap { $0.tooltipInfo(state: podmanState) }
+            if runtimeActivity["Podman"] == true {
+                podmanActionItem.title = "Working..."
+                podmanActionItem.isEnabled = false
+            } else {
+                podmanActionItem.title = podmanState == .running ? "Disable Daemon" : "Enable Daemon"
+                podmanActionItem.isEnabled = true
             }
+        }
+
+        // ---- Lume (bloco proprio, sem toggle) ----
+        let lumeState = runtimeStates["Lume"] ?? .notInstalled
+        let lumeProbe = runtimes.first { $0.label == "Lume" }
+        place(sepLume, present: lumeState != .notInstalled)
+        place(lumeRowItem, present: lumeState != .notInstalled)
+        if lumeState != .notInstalled {
+            lumeRowItem.title = "Lume: \(lumeState == .running ? "Running" : "Not Running")"
+            lumeRowItem.toolTip = lumeProbe.flatMap { $0.tooltipInfo(state: lumeState) }
+            lumeDetectItem.title = "Detected"
+            place(lumeDetectItem, present: true)
         } else {
-            if !vmnetInSection {
-                let anchor = menu.index(of: aboutAppleItem)
-                let base = anchor >= 0 ? anchor : menu.numberOfItems
-                menu.insertItem(vmnetRowItem, at: base)
-                menu.insertItem(vmnetActionItem, at: base + 1)
-                menu.insertItem(vmnetBottomSeparator, at: base + 2)
-            }
-            var text = vmnetState == .running ? "VMware vmnet: Ativo" : "VMware vmnet: Parado"
+            place(lumeDetectItem, present: false)
+        }
+
+        // ---- VMware vmnet (bloco proprio, somente subir) ----
+        let vmnetPresent = vmnetState != .notInstalled
+        place(sepVmnet, present: vmnetPresent)
+        place(vmnetRowItem, present: vmnetPresent)
+        if vmnetPresent {
+            var text = vmnetState == .running ? "VMware vmnet: Running" : "VMware vmnet: Not Running"
             if vmCount > 0 {
                 text += vmCount == 1 ? " - 1 VM" : " - \(vmCount) VMs"
             }
             vmnetRowItem.title = text
             vmnetRowItem.isEnabled = false
             if vmnetBusy {
-                vmnetActionItem.title = "Subindo rede virtual..."
+                vmnetActionItem.title = "Working..."
                 vmnetActionItem.isEnabled = false
             } else {
-                vmnetActionItem.title = "Subir rede virtual (vmnet)"
+                vmnetActionItem.title = "Enable Daemon"
                 vmnetActionItem.isEnabled = true
             }
+            place(vmnetActionItem, present: vmnetState != .running)
+        } else {
+            place(vmnetActionItem, present: false)
         }
+
+        place(tailSep, present: true)
 
         let versionSuffix = cliVersion.map { " \($0)" } ?? ""
         switch state {
-        case .running: item.button?.toolTip = "Apple Container\(versionSuffix): ligado"
-        case .stopped: item.button?.toolTip = "Apple Container\(versionSuffix): desligado"
-        case .notInstalled: item.button?.toolTip = "Apple Container: CLI indisponivel"
+        case .running: item.button?.toolTip = "Apple Container\(versionSuffix): running"
+        case .stopped: item.button?.toolTip = "Apple Container\(versionSuffix): stopped"
+        case .notInstalled: item.button?.toolTip = "Apple Container: CLI not found"
         }
 
         switch activity {
         case .starting:
-            item.button?.toolTip = "Apple Container\(versionSuffix): iniciando..."
+            item.button?.toolTip = "Apple Container\(versionSuffix): starting..."
         case .stopping:
-            item.button?.toolTip = "Apple Container\(versionSuffix): parando..."
+            item.button?.toolTip = "Apple Container\(versionSuffix): stopping..."
         case .none:
             break
         }
 
-        headerItem.title = "Apple Container\(versionSuffix)"
-        aboutItem.title = "Sobre ContainerStatus\(appVersion.map { " \($0)" } ?? "")"
+        appleRowItem.title = "Apple Container\(versionSuffix)"
+        aboutItem.title = "About."
 
-        // Sufixo de carga: "Status: Ligado (2 containers)" quando a CLI
-        // respondeu a contagem; singular, plural e ausente (CLI muda) tratados.
-        func statusSuffix() -> String {
-            guard let containerCount else { return "" }
-            if containerCount == 1 { return " (1 container)" }
-            return " (\(containerCount) containers)"
-        }
+        statusLineItem.title = activity != .none
+            ? (state == .running ? "Status: Running" : "Status: Not Running")
+            : (state == .running ? "Status: Running\(statusSuffix())" : "Status: Not Running")
 
-        if activity != .none {
-            statusLineItem.title = state == .running ? "Status: Ligado" : "Status: Desligado"
-            actionItem.title = "Alternando..."
-            actionItem.isEnabled = false
-            actionItem.state = .off
-        } else {
-            switch state {
-            case .running:
-                statusLineItem.title = "Status: Ligado\(statusSuffix())"
-                actionItem.title = "Desligar daemon"
-                actionItem.isEnabled = true
-                actionItem.state = .off
-            case .stopped:
-                statusLineItem.title = "Status: Desligado"
-                actionItem.title = "Ligar daemon"
-                actionItem.isEnabled = true
-                actionItem.state = .off
-            case .notInstalled:
-                statusLineItem.title = "Status: Nao instalado"
-                actionItem.title = Self.projectLinkText
-                actionItem.isEnabled = true
-                actionItem.state = .off
-            }
-        }
-
-        let loginPending = loginStatusCache == .requiresApproval
-        loginItem.title = loginPending ? "Abrir no login - aprove no painel" : "Abrir no login"
+        loginItem.title = "Open at Login"
         loginItem.state = loginStatusCache == .enabled ? .on : .off
         loginItem.isEnabled = true
+    }
+
+    private func statusSuffix() -> String {
+        guard let containerCount else { return "" }
+        if containerCount == 1 { return " (1 container)" }
+        return " (\(containerCount) containers)"
     }
 
     // MARK: Polling
@@ -549,6 +614,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
     }
 
+    // MARK: Varedura ativa (⟳ do cabecalho)
+
+    @objc private func headerClicked(_ sender: NSMenuItem) {
+        cli.rescan()
+        refreshNow()
+    }
+
     // MARK: Rede virtual (vmnet) - somente subir, nunca derrubar
 
     @objc private func vmnetClicked(_ sender: NSMenuItem) {
@@ -619,115 +691,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     static func checkMenuErrors(expect: (Bool, String) -> Void) {
         NSApplication.shared.setActivationPolicy(.accessory)
         let controller = StatusItemController(
-            cli: ContainerCLI(directories: []),
-            runtimes: [RuntimeProbe(config: .colima, directories: [])])
+            cli: ContainerCLI(directories: []), runtimes: [],
+            vmnet: VmnetProbe(fusionAppPath: "/no/such/Fusion.app"))
         controller.item.isVisible = false
         defer { NSStatusBar.system.removeStatusItem(controller.item) }
+        let menu = controller.menu
 
-        let initialCount = controller.menu.numberOfItems
-        expect(controller.errorItem.menu == nil, "menu inicia sem linha de erro")
-        expect(controller.menu.index(of: controller.runtimeItems["Colima"] ?? NSMenuItem()) == -1,
-               "menu inicia sem linha de colima")
-
-        // Sufixo de carga no Status: contagem fresca do toggle, singular e
-        // plural; finish sem contagem mantem a ultima.
-        let listTwo = [ContainerCLI.ContainerSummary(id: "web", memoryBytes: 2_147_483_648),
-                       ContainerCLI.ContainerSummary(id: "db", memoryBytes: nil)]
-        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
-                          poll: (.running, nil), containers: listTwo)
-        expect(controller.statusLineItem.title == "Status: Ligado (2 containers)",
-               "status ligado mostra a contagem de containers")
-        let rows = controller.containerRowItems
-        expect(rows.count == 2 && rows[0].title == "web - 2048 MB" && rows[1].title == "db",
-               "linhas de container mostram id e memoria")
-        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
-                          poll: (.running, nil),
-                          containers: [ContainerCLI.ContainerSummary(id: "a", memoryBytes: nil)])
-        expect(controller.statusLineItem.title == "Status: Ligado (1 container)",
-               "um container aparece no singular")
-        expect(controller.containerRowItems.count == 1,
-               "linhas de container acompanham a lista")
-        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
-                          poll: (.running, nil))
-        expect(controller.statusLineItem.title == "Status: Ligado (1 container)",
-               "finish sem contagem mantem a ultima conhecida")
-        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "x"),
-                          poll: (.stopped, nil))
-        expect(controller.containerRowItems.isEmpty,
-               "servico parado esconde as linhas de container")
-        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
-                          poll: (.running, nil), containers: [])
-        expect(controller.containerRowItems.isEmpty,
-               "servico de pe sem carga nao tem linhas de container")
-
-        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true,
-                                              stderr: "Falha ao iniciar\nDetalhe adicional"),
-                          poll: (.stopped, nil))
-        expect(controller.errorItem.title == "Falha ao iniciar"
-               && controller.menu.index(of: controller.errorItem) == controller.menu.index(of: controller.loginItem) - 1,
-               "falha insere primeira linha do erro antes do login")
-
-        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Falha ao parar"),
-                          poll: (.running, nil))
-        expect(controller.errorItem.title == "Falha ao parar" && controller.menu.numberOfItems == initialCount + 1,
-               "nova falha atualiza erro sem duplicar item")
-
-        controller.absorb(poll: (.running, nil), sequence: 0)
-        expect(controller.errorItem.title == "Falha ao parar" && controller.errorItem.menu === controller.menu,
-               "erro local de toggle sobrevive a poll saudavel")
-
-        controller.absorb(poll: (.stopped, "CLI retornou detalhe"), sequence: 1)
-        expect(controller.errorItem.title == "CLI retornou detalhe",
-               "poll com detalhe proprio substitui erro local")
-
-        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true), poll: (.running, nil))
-        expect(controller.errorItem.menu == nil && controller.menu.numberOfItems == initialCount,
-               "operacao bem-sucedida remove erro anterior")
-
-        controller.absorb(poll: (.notInstalled, "CLI indisponivel"), sequence: 2)
-        expect(controller.errorItem.title == "CLI indisponivel" && controller.errorItem.menu === controller.menu,
-               "polling com falha exibe erro")
-
-        controller.absorb(poll: (.running, nil), sequence: 3)
-        expect(controller.errorItem.menu == nil && controller.menu.numberOfItems == initialCount,
-               "recuperacao no polling remove erro")
-
-        // Checagens em voo fora de ordem: um resultado antigo (sequence menor
-        // que o ultimo aplicado) nao sobrescreve o estado recente. O teste
-        // exercita o guard de ordem com sequencias explicitas; o poll real
-        // (timer e menu) usa o contador compartilhado nextSequence().
-        controller.absorb(poll: (.notInstalled, "checagem antiga"), sequence: 1)
-        expect(controller.state == .running && controller.errorItem.menu == nil,
-               "poll antigo fora de ordem e descartado")
-        controller.absorb(poll: (.running, nil), sequence: 4)
-        expect(controller.state == .running,
-               "poll novo em sequencia correta aplica")
-
-        // Barreira de epoca: uma leitura que comecou ANTES de finish() nao
-        // pode aterrissar depois da mutacao com estado de meio-caminho,
-        // mesmo com sequence alto (a leitura de epoca antiga e descartada
-        // antes do guard de ordem).
-        let epochBefore = controller.mutationEpoch
-        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true), poll: (.running, nil))
-        controller.absorb(poll: (.stopped, nil), sequence: Int.max, epoch: epochBefore)
-        expect(controller.state == .running && controller.errorItem.menu == nil,
-               "poll de epoca anterior a mutacao e descartado")
-        controller.absorb(poll: (.running, nil), sequence: Int.max, epoch: controller.mutationEpoch)
-        expect(controller.state == .running,
-               "poll da epoca corrente aplica")
-
-        // Anchor degradado: se a estrutura mudar e loginItem sair do menu,
-        // o insert precisa cair no fim (index(of:) = -1) sem excecao.
-        controller.menu.removeItem(controller.loginItem)
-        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Falha sem anchor"),
-                          poll: (.running, nil))
-        expect(controller.errorItem.menu === controller.menu
-               && controller.menu.index(of: controller.errorItem) == controller.menu.numberOfItems - 1,
-               "erro sem loginItem no menu insere no fim sem excecao")
-
-        // Secao vmnet (regra 5): sem Fusion, fora do menu e sem separadores
-        // consecutivos; com Fusion, bloco login | sep | linha | acao | sep |
-        // Sobre. Diretorio fake de Fusion com vmnet-cli executavel.
         func hasConsecutiveSeparators(_ menu: NSMenu) -> Bool {
             var previousWasSeparator = false
             for item in menu.items {
@@ -738,99 +707,85 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             return false
         }
 
-        let noFusion = StatusItemController(
-            cli: ContainerCLI(directories: []), runtimes: [],
-            vmnet: VmnetProbe(fusionAppPath: "/no/such/Fusion.app"))
-        noFusion.item.isVisible = false
-        defer { NSStatusBar.system.removeStatusItem(noFusion.item) }
-        expect(noFusion.vmnetRowItem.menu == nil && noFusion.vmnetActionItem.menu == nil,
-               "vmnet sem Fusion fica fora do menu")
-        expect(!hasConsecutiveSeparators(noFusion.menu),
-               "menu sem Fusion nao tem separadores consecutivos")
+        // Estrutura inicial: cabecalho + login fixos, sem blocos (nada
+        // detectado com runtimes: [] e Fusion ausente), sem erro.
+        expect(controller.headerItem.menu != nil && controller.loginItem.menu != nil,
+               "cabecalho e login fixos no menu")
+        expect(controller.appleRowItem.menu != nil && controller.dockerRowItem.menu != nil,
+               "blocos Apple e Docker sempre presentes")
+        expect(controller.podmanRowItem.menu == nil && controller.lumeRowItem.menu == nil,
+               "podman e lume fora do menu quando nao detectados")
+        expect(controller.vmnetRowItem.menu == nil,
+               "vmnet fora do menu sem Fusion")
+        expect(!hasConsecutiveSeparators(menu), "sem separadores consecutivos")
+        expect(controller.errorItem.menu == nil, "menu inicia sem linha de erro")
 
-        let fusionDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("cs_fusion_\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(
-            at: fusionDirectory.appendingPathComponent("Contents/Library"),
-            withIntermediateDirectories: true)
-        let cliPath = fusionDirectory.appendingPathComponent("Contents/Library/vmnet-cli").path
-        try? "#!/bin/sh\nexit 0".write(toFile: cliPath, atomically: false, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliPath)
-        let withFusion = StatusItemController(
-            cli: ContainerCLI(directories: []), runtimes: [],
-            vmnet: VmnetProbe(fusionAppPath: fusionDirectory.path))
-        withFusion.item.isVisible = false
-        defer { NSStatusBar.system.removeStatusItem(withFusion.item) }
-        withFusion.absorb(poll: (.running, nil), vmnet: (.running, 1), sequence: 1)
-        expect(withFusion.vmnetRowItem.menu != nil && withFusion.vmnetActionItem.menu != nil,
-               "vmnet com Fusion monta o bloco no menu")
-        expect(withFusion.vmnetRowItem.title == "VMware vmnet: Ativo - 1 VM"
-               && withFusion.vmnetActionItem.title == "Subir rede virtual (vmnet)"
-               && withFusion.vmnetActionItem.isEnabled,
-               "linhas do bloco vmnet com estado e acao")
-        let menu = withFusion.menu
-        expect(menu.index(of: withFusion.vmnetRowItem) == menu.index(of: withFusion.vmnetActionItem) - 1
-               && menu.index(of: withFusion.vmnetBottomSeparator) == menu.index(of: withFusion.vmnetActionItem) + 1,
-               "bloco vmnet fechado por separador proprio")
-        expect(!hasConsecutiveSeparators(menu),
-               "menu com Fusion nao tem separadores consecutivos")
-        withFusion.absorb(poll: (.running, nil), vmnet: (.notInstalled, 0), sequence: 2)
-        expect(withFusion.vmnetRowItem.menu == nil && !hasConsecutiveSeparators(menu),
-               "vmnet removido sai do menu sem separadores orfaos")
+        // Header: titulo com versao do app e acao de varedura.
+        expect(controller.headerItem.title.contains("Container Status")
+               && controller.headerItem.title.contains("⟳"),
+               "cabecalho mostra nome, versao e ⟳")
 
-        // Cancelar o dialogo de senha do vmnet nao e falha: sem linha de
-        // erro e sem retencao local.
-        withFusion.finishVmnet(result: CLIRunResult(exitCode: 2, spawned: true,
-                                                    stderr: "execution error: User canceled. (-128)"),
-                               state: .running, vmCount: 1)
-        expect(withFusion.errorItem.menu == nil && withFusion.detailIsLocal == false,
-               "cancelar vmnet sai sem linha de erro")
+        // Bloco Apple: estado, linhas de container com memoria, acao.
+        let listTwo = [ContainerCLI.ContainerSummary(id: "web", memoryBytes: 2_147_483_648),
+                       ContainerCLI.ContainerSummary(id: "db", memoryBytes: nil)]
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
+                          poll: (.running, nil), containers: listTwo)
+        expect(controller.statusLineItem.title == "Status: Running (2 containers)",
+               "status em ingles com contagem quando rodando")
+        let rows = controller.containerRowItems
+        expect(rows.count == 2 && rows[0].title == "web - 2048 MB" && rows[1].title == "db",
+               "linhas de container mostram id e memoria")
+        expect(controller.actionItem.title == "Disable Daemon" && controller.actionItem.isEnabled,
+               "acao do daemon em ingles e habilitada")
+        expect(controller.githubItem.menu != nil && controller.githubItem.title == "GitHub",
+               "GitHub presente no bloco Apple")
 
-        // Cadencia por sonda (lume pollEvery=5): absorb faz merge por label,
-        // entao um ciclo que so amostrou uma sonda nao apaga as outras.
-        let cadence = StatusItemController(
-            cli: ContainerCLI(directories: []), runtimes: [],
-            vmnet: VmnetProbe(fusionAppPath: "/no/such/Fusion.app"))
-        cadence.item.isVisible = false
-        defer { NSStatusBar.system.removeStatusItem(cadence.item) }
-        cadence.absorb(poll: (.running, nil),
-                       runtimes: ["Colima": .running, "Docker": .stopped],
-                       sequence: 1)
-        cadence.absorb(poll: (.running, nil),
-                       runtimes: ["Docker": .running],
-                       sequence: 2)
-        expect(cadence.runtimeStates["Colima"] == .running
-               && cadence.runtimeStates["Docker"] == .running,
-               "absorb faz merge e nao apaga sondas fora do ciclo")
-        expect(RuntimeProbeConfig.lume.pollEvery == 5
-               && RuntimeProbeConfig.colima.pollEvery == 1,
-               "cadencia: lume a cada 5 ciclos, resto a cada ciclo")
+        // Ciclo de vida da linha de erro: entra, atualiza, sai.
+        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Start failed"),
+                          poll: (.running, nil))
+        expect(controller.errorItem.title == "Start failed" && controller.errorItem.menu != nil,
+               "falha insere linha de erro")
+        controller.absorb(poll: (.running, nil), containers: listTwo, sequence: 1)
+        expect(controller.errorItem.title == "Start failed",
+               "erro local sobrevive a poll saudavel")
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
+                          poll: (.running, nil), containers: listTwo)
+        expect(controller.errorItem.menu == nil, "sucesso remove a linha de erro")
+        controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "x"),
+                          poll: (.stopped, nil), containers: [])
+        expect(controller.containerRowItems.allSatisfy { $0.menu == nil }
+               && controller.actionItem.title == "Enable Daemon",
+               "servico parado esconde linhas e troca a acao")
 
-        // Linha read-only do colima: entra abaixo do Status quando o binario
-        // existe e some quando ele desaparece (insert/remove em apply, regra 5).
-        let colimaController = StatusItemController(
-            cli: ContainerCLI(directories: []),
-            runtimes: [RuntimeProbe(config: .colima, directories: [])])
-        colimaController.item.isVisible = false
-        defer { NSStatusBar.system.removeStatusItem(colimaController.item) }
-        let colimaCount = colimaController.menu.numberOfItems
-        let colimaRow = { colimaController.runtimeItems["Colima"] ?? NSMenuItem() }
-        colimaController.absorb(poll: (.running, nil), runtimes: ["Colima": .running], sequence: 1)
-        expect(colimaController.menu.index(of: colimaRow())
-               == colimaController.menu.index(of: colimaController.statusLineItem) + 1
-               && colimaRow().title == "Colima: Ligado",
-               "colima ligado insere linha informativa abaixo do Status")
-        colimaController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 2)
-        expect(colimaRow().title == "Colima: Desligado"
-               && colimaController.menu.index(of: colimaRow()) != -1,
-               "colima parado atualiza a linha sem duplicar item")
-        colimaController.absorb(poll: (.running, nil), runtimes: ["Colima": .notInstalled], sequence: 3)
-        expect(colimaController.menu.index(of: colimaRow()) == -1
-               && colimaController.menu.numberOfItems == colimaCount,
-               "colima removido tira a linha do menu")
+        // Bloco Docker: daemon sempre presente, sem toggle; familia so com
+        // detectados, indentada, com acao proprio.
+        expect(controller.dockerRowItem.menu != nil && controller.dockerDetectItem.menu != nil,
+               "bloco Docker sempre presente")
+        controller.absorb(poll: (.running, nil),
+                          runtimes: ["Docker": .running, "OrbStack": .running,
+                                     "Colima": .notInstalled, "Docker Desktop": .notInstalled],
+                          sequence: 2)
+        expect(controller.dockerRowItem.title == "Docker: Running"
+               && controller.dockerDetectItem.title == "Detected",
+               "docker mostra estado e Detected")
+        expect(controller.subStatusItems["OrbStack"]?.menu != nil,
+               "OrbStack detectado entra como sub-item")
+        expect(controller.subStatusItems["OrbStack"]?.indentationLevel == 1,
+               "sub-item indentado no bloco Docker")
+        expect(controller.subActionItems["OrbStack"]?.title == "Disable Daemon"
+               && controller.subActionItems["OrbStack"]?.isEnabled == true,
+               "OrbStack com toggle proprio")
+        expect(controller.subStatusItems["Colima"]?.menu == nil
+               && controller.subStatusItems["Docker Desktop"]?.menu == nil,
+               "providers nao detectados ficam fora do menu")
+        controller.absorb(poll: (.running, nil),
+                          runtimes: ["Docker": .notInstalled, "OrbStack": .notInstalled],
+                          sequence: 3)
+        expect(controller.dockerDetectItem.title == "Not Detected"
+               && controller.subStatusItems["OrbStack"]?.menu == nil,
+               "sem deteccao o bloco Docker esvazia a familia")
 
-        // Passo 2: linha com receita de controle e clicavel; o toggle async
-        // (com estado simulado em arquivo) termina aplicando o novo estado.
+        // Toggle de sub-provider: ciclo completo com stub stateful.
         let toggleDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("cs_toggle_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: toggleDirectory, withIntermediateDirectories: false)
@@ -842,165 +797,47 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
           status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
         esac
         """
-        let statefulPath = toggleDirectory.appendingPathComponent("colima").path
-        try? statefulScript.write(toFile: statefulPath, atomically: false, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: statefulPath)
+        let stubPath = toggleDirectory.appendingPathComponent("colima").path
+        try? statefulScript.write(toFile: stubPath, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stubPath)
         let toggleController = StatusItemController(
             cli: ContainerCLI(directories: []),
-            runtimes: [RuntimeProbe(config: .colima, directories: [toggleDirectory.path])])
+            runtimes: [RuntimeProbe(config: .colima, directories: [toggleDirectory.path])],
+            vmnet: VmnetProbe(fusionAppPath: "/no/such/Fusion.app"))
         toggleController.item.isVisible = false
         defer { NSStatusBar.system.removeStatusItem(toggleController.item) }
-        let toggleRow = { toggleController.runtimeItems["Colima"] ?? NSMenuItem() }
-        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 1)
-        expect(toggleRow().isEnabled == true, "linha com controle e clicavel")
-
-        toggleController.runtimeToggled(toggleRow())
-        expect(toggleRow().title == "Colima: Alternando..." && toggleRow().isEnabled == false,
-               "toggle em voo mostra Alternando e desabilita a linha")
-        var toggleDeadline = Date().addingTimeInterval(5)
-        while Date() < toggleDeadline && toggleController.runtimeStates["Colima"] != .running {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-        expect(toggleController.runtimeStates["Colima"] == .running
-               && toggleRow().title == "Colima: Ligado" && toggleRow().isEnabled == true,
-               "toggle bem-sucedido aplica o novo estado e reabilita a linha")
-
-        // Toggle falho: erro local com o rotulo do runtime, retido por detailIsLocal.
-        // O estado atual e Ligado (start acima), entao o toggle executa o stop.
-        let failingScript = """
-        #!/bin/sh
-        case "$1" in
-          stop) echo "falhou feio" >&2; exit 1 ;;
-          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
-        esac
-        """
-        let failingPath = toggleDirectory.appendingPathComponent("colima").path
-        try? failingScript.write(toFile: failingPath, atomically: false, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: failingPath)
-        toggleController.runtimeToggled(toggleRow())
-        toggleDeadline = Date().addingTimeInterval(5)
-        while Date() < toggleDeadline && toggleController.errorItem.menu == nil {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-        expect(toggleController.errorItem.title.hasPrefix("Colima:")
-               && toggleController.errorItem.menu === toggleController.menu,
-               "toggle falho mostra erro local com o rotulo do runtime")
-        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 2)
-        expect(toggleController.errorItem.title.hasPrefix("Colima:"),
-               "erro local de runtime sobrevive a poll saudavel")
-
-        // Direcao do toggle vem de leitura fresca: o menu (velho) diz
-        // Desligado, mas a maquina real esta rodando; start em runtime vivo
-        // falharia, entao o toggle correto e o stop.
-        let staleScript = """
-        #!/bin/sh
-        case "$1" in
-          start) if [ -f "$0.state" ]; then echo "ja rodando" >&2; exit 1; fi
-                 touch "$0.state"; exit 0 ;;
-          stop) rm -f "$0.state"; exit 0 ;;
-          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
-        esac
-        """
-        let stalePath = toggleDirectory.appendingPathComponent("colima").path
-        try? staleScript.write(toFile: stalePath, atomically: false, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stalePath)
-        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 3)
-        expect(toggleRow().title == "Colima: Desligado",
-               "menu velho mostra desligado enquanto a planta roda")
-        toggleController.runtimeToggled(toggleRow())
-        let freshDeadline = Date().addingTimeInterval(5)
-        while Date() < freshDeadline && toggleController.runtimeActivity["Colima"] == true {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-        expect(toggleController.runtimeStates["Colima"] == .stopped
-               && toggleController.errorItem.menu == nil,
-               "toggle decide a direcao por leitura fresca, nao pelo menu velho")
-
-        // Start que sobe com atraso (open -a do OrbStack): o controle retorna
-        // antes do runtime responder; o retry curto pos-controle pega o estado
-        // novo antes de encerrar o "Alternando...".
-        let delayedScript = """
-        #!/bin/sh
-        case "$1" in
-          start) /bin/sleep 1; touch "$0.state"; exit 0 ;;
-          stop) rm -f "$0.state"; exit 0 ;;
-          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
-        esac
-        """
-        let delayedPath = toggleDirectory.appendingPathComponent("colima").path
-        try? delayedScript.write(toFile: delayedPath, atomically: false, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: delayedPath)
-        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 4)
-        toggleController.runtimeToggled(toggleRow())
-        let retryDeadline = Date().addingTimeInterval(8)
-        while Date() < retryDeadline && toggleController.runtimeActivity["Colima"] == true {
+        let colimaRow = { toggleController.subStatusItems["Colima"] ?? NSMenuItem() }
+        toggleController.absorb(poll: (.running, nil),
+                                runtimes: ["Colima": .stopped], sequence: 1)
+        expect(colimaRow().menu != nil && colimaRow().isEnabled == false,
+               "colima detectado entra como sub-item do bloco Docker")
+        expect(toggleController.subActionItems["Colima"]?.title == "Enable Daemon",
+               "colima parado oferece Enable Daemon")
+        toggleController.subActionItems["Colima"]?.representedObject = "Colima"
+        toggleController.runtimeToggled(toggleController.subActionItems["Colima"] ?? NSMenuItem())
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline && toggleController.runtimeActivity["Colima"] == true {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
         expect(toggleController.runtimeStates["Colima"] == .running,
-               "start com subida atrasada converge para ligado no retry")
+               "toggle do sub-provider completa o ciclo")
 
-        // Lado complementar da leitura fresca: menu velho diz Ligado, a
-        // maquina real esta parada; o clique LIGA (verdade da maquina vence
-        // o rotulo velho, que o poll seguinte corrige). O stub "delayed"
-        // starta com exit 0 e a leitura fresca ve parado.
-        try? FileManager.default.removeItem(at: toggleDirectory.appendingPathComponent("colima.state"))
-        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .running], sequence: 5)
-        expect(toggleRow().title == "Colima: Ligado",
-               "menu velho mostra ligado enquanto a planta esta parada")
-        toggleController.runtimeToggled(toggleRow())
-        let staleOnDeadline = Date().addingTimeInterval(8)
-        while Date() < staleOnDeadline && toggleController.runtimeActivity["Colima"] == true {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        }
-        expect(toggleController.runtimeStates["Colima"] == .running
-               && toggleController.errorItem.menu == nil,
-               "toggle com menu velho ligado inicia o runtime parado")
+        // Cancelar dialogo do vmnet nao e falha.
+        toggleController.finishVmnet(
+            result: CLIRunResult(exitCode: 2, spawned: true, stderr: "User canceled. (-128)"),
+            state: .running, vmCount: 1)
+        expect(toggleController.errorItem.menu == nil,
+               "cancelar vmnet sai sem linha de erro")
 
-        // Poll periodico vivo: o estado acompanha os flips da CLI por
-        // multiplos ciclos. Regressao do P1 da revisao dev: a sentinela
-        // Int.max envenenava lastAppliedSequence e congelava o poll apos o
-        // primeiro absorb (o dot parava de acompanhar o daemon de verdade).
-        // Nota: o loop abaixo drena o RunLoop para que os jobs @MainActor
-        // do timer executem; no harness de CLI eles podem rodar em thread
-        // cooperativa (warnings de data race sao artefato do harness - no
-        // app de verdade o NSApplication.run bombeia a MainActor na main
-        // thread). A serializacao do actor garante ausencia de corrida.
-        let flipDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("cs_flip_\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: flipDirectory, withIntermediateDirectories: false)
-        let flipScript = """
-        #!/bin/sh
-        if [ "$1" = "--version" ]; then echo "container CLI version 1.0.0"; exit 0; fi
-        if [ "$1" = "system" ] && [ "$2" = "status" ]; then
-          n=$(cat "$0.n" 2>/dev/null || echo 0)
-          n=$((n+1)); echo $n > "$0.n"
-          [ $((n % 2)) -eq 1 ] && exit 0 || exit 1
-        fi
-        exit 0
-        """
-        let flipPath = flipDirectory.appendingPathComponent("container").path
-        try? flipScript.write(toFile: flipPath, atomically: false, encoding: .utf8)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: flipPath)
-        let pollingController = StatusItemController(
-            cli: ContainerCLI(directories: [flipDirectory.path]), runtimes: [])
-        pollingController.item.isVisible = false
-        defer { NSStatusBar.system.removeStatusItem(pollingController.item) }
-        pollingController.startPolling(every: 0.2)
-        defer { pollingController.pollTimer?.cancel() }
-        var transitions = 0
-        var lastObserved = pollingController.state
-        let flipDeadline = Date().addingTimeInterval(5)
-        while Date() < flipDeadline && transitions < 3 {
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-            if pollingController.state != lastObserved {
-                transitions += 1
-                lastObserved = pollingController.state
-            }
-        }
-        expect(transitions >= 3,
-               "poll periodico acompanha os flips da CLI por multiplos ciclos")
+        // Ordem: epoca e sequencia seguem descartando leituras velhas.
+        let epochBefore = toggleController.mutationEpoch
+        toggleController.finish(result: CLIRunResult(exitCode: 0, spawned: true),
+                                poll: (.running, nil), containers: [])
+        toggleController.absorb(poll: (.stopped, nil), sequence: Int.max,
+                                epoch: epochBefore)
+        expect(toggleController.runtimeStates["Colima"] == .running,
+               "poll de epoca anterior nao sobrescreve o toggle")
     }
-
     // MARK: Launch at login
 
     private static var loginStatus: SMAppService.Status {

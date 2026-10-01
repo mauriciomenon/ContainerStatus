@@ -131,6 +131,12 @@ final class ContainerCLI: Sendable {
     /// refresh the displayed version).
     func currentBinaryPath() -> String? { resolvedBinaryPath }
 
+    /// Limpa as assinaturas de cache: a proxima leitura re-resolve e
+    /// re-probe a versao (varedura ativa do ⟳ do cabecalho).
+    func rescan() {
+        pathLock.withLock { $0.signatures = nil }
+    }
+
     func currentVersion() -> String? { pathLock.withLock { $0.resolved?.version } }
 
     /// Human-readable install info, served from the resolution cache (the
