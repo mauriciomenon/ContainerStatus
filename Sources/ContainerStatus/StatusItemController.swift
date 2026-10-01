@@ -396,7 +396,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             let fresh = probe.currentStatus().state
             let turningOff = fresh == .running
             let result = turningOff ? probe.stop() : probe.start()
-            let state = probe.currentStatus().state
+            // Controle pode retornar antes do runtime terminar de subir
+            // (ex.: open -a do OrbStack e imediato, o app ainda nao responde);
+            // sondar com retry curto antes de decidir o estado final.
+            var state = probe.currentStatus().state
+            if result.succeeded {
+                let expected: ExternalRuntimeState = turningOff ? .stopped : .running
+                var attempts = 0
+                while state != expected && attempts < 3 {
+                    try? await Task.sleep(for: .seconds(1))
+                    attempts += 1
+                    state = probe.currentStatus().state
+                }
+            }
             await MainActor.run { [weak self] in
                 self?.finishRuntime(label: label, result: result, state: state)
             }
@@ -609,6 +621,29 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(toggleController.runtimeStates["Colima"] == .stopped
                && toggleController.errorItem.menu == nil,
                "toggle decide a direcao por leitura fresca, nao pelo menu velho")
+
+        // Start que sobe com atraso (open -a do OrbStack): o controle retorna
+        // antes do runtime responder; o retry curto pos-controle pega o estado
+        // novo antes de encerrar o "Alternando...".
+        let delayedScript = """
+        #!/bin/sh
+        case "$1" in
+          start) /bin/sleep 1; touch "$0.state"; exit 0 ;;
+          stop) rm -f "$0.state"; exit 0 ;;
+          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
+        esac
+        """
+        let delayedPath = toggleDirectory.appendingPathComponent("colima").path
+        try? delayedScript.write(toFile: delayedPath, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: delayedPath)
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped], sequence: 4)
+        toggleController.runtimeToggled(toggleRow())
+        var retryDeadline = Date().addingTimeInterval(8)
+        while Date() < retryDeadline && toggleController.runtimeActivity["Colima"] == true {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(toggleController.runtimeStates["Colima"] == .running,
+               "start com subida atrasada converge para ligado no retry")
 
         // Poll periodico vivo: o estado acompanha os flips da CLI por
         // multiplos ciclos. Regressao do P1 da revisao dev: a sentinela
