@@ -49,6 +49,14 @@ struct AppMain {
             }
             print(line)
         }
+        let vmnet = VmnetProbe()
+        if vmnet.fusionInstalled {
+            let (vmnetState, vmCount) = vmnet.currentStatus()
+            let text = vmnetState == .running ? "ativo" : "parado"
+            print("VMware vmnet: \(text)\(vmCount > 0 ? " (\(vmCount) VM)" : "")")
+        } else {
+            print("VMware vmnet: Fusion nao instalado")
+        }
         exit(0)
     }
 

@@ -140,6 +140,73 @@ extension RuntimeProbeConfig {
     )
 }
 
+/// Estado da rede virtual do VMware (vmnet), para a secao propria do menu.
+enum VmnetState: Equatable, Sendable {
+    /// Fusion nao instalado: secao escondida.
+    case notInstalled
+    case running
+    case stopped
+}
+
+/// Sonda e acao da rede virtual do VMware Fusion. Os daemons vmnet sao
+/// servicos de root gerenciados pelo `vmnet-cli`; "subir" pede senha via
+/// dialogo de administrador (o app continua sem privilegios). Sem caminho
+/// de desligar: o pedido e recuperar rede, nao derrubar.
+final class VmnetProbe: Sendable {
+    private static let statusTimeout: TimeInterval = 5
+    private static let startTimeout: TimeInterval = 300
+
+    private let fusionAppPath: String
+    private let pgrepPath: String
+
+    init(fusionAppPath: String = "/Applications/VMware Fusion.app",
+         pgrepPath: String = "/usr/bin/pgrep") {
+        self.fusionAppPath = fusionAppPath
+        self.pgrepPath = pgrepPath
+    }
+
+    var vmnetCliPath: String {
+        URL(fileURLWithPath: fusionAppPath)
+            .appendingPathComponent("Contents/Library/vmnet-cli").path
+    }
+
+    var fusionInstalled: Bool {
+        FileManager.default.isExecutableFile(atPath: vmnetCliPath)
+    }
+
+    /// Daemon vmnet de pe (natd/dhcpd/bridge) e VMs rodando (vmware-vmx).
+    func currentStatus() -> (state: VmnetState, vmCount: Int) {
+        guard fusionInstalled else { return (.notInstalled, 0) }
+        let daemons = ContainerCLI.runBinary(pgrepPath,
+                                             arguments: ["-f", "vmnet-(natd|dhcpd|bridge)"],
+                                             timeout: Self.statusTimeout)
+        let vms = ContainerCLI.runBinary(pgrepPath,
+                                         arguments: ["-x", "vmware-vmx"],
+                                         timeout: Self.statusTimeout)
+        let vmCount = vms.succeeded
+            ? vms.stdout.split(separator: "\n", omittingEmptySubsequences: true).count
+            : 0
+        // pgrep: exit 0 com pids = tem daemon; 1 = nenhum; falha de spawn =
+        // conservador, mostra parado e o poll seguinte corrige.
+        let state: VmnetState = daemons.spawned && daemons.exitCode == 0 ? .running : .stopped
+        return (state, vmCount)
+    }
+
+    /// Comando de subida com elevacao: o macOS pede a senha no dialogo de
+    /// administrador. Para o repair: para (best-effort) e sobe de novo.
+    func startScript() -> String {
+        let cli = vmnetCliPath.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let inner = "\"\(cli)\" --stop >/dev/null 2>&1; \"\(cli)\" --start"
+        return "do shell script \"\(inner)\" with administrator privileges"
+    }
+
+    func start() -> CLIRunResult {
+        ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript()],
+                               timeout: Self.startTimeout)
+    }
+}
+
 /// Executor read-only de uma receita: resolve o binario (ordem dos
 /// diretorios = prioridade), roda o status com watchdog e interpreta.
 final class RuntimeProbe: Sendable {

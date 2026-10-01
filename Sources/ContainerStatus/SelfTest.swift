@@ -221,6 +221,46 @@ enum SelfTest {
 
         try checkColima(in: temporary, expect: expect)
         try checkRuntimeRecipes(in: temporary, expect: expect)
+        try checkVmnet(in: temporary, expect: expect)
+    }
+
+    /// Sonda vmnet com Fusion e pgrep simulados; script de subida com escape
+    /// de caminho com espaco ("VMware Fusion.app").
+    private static func checkVmnet(in temporary: URL, expect: (Bool, String) -> Void) throws {
+        expect(VmnetProbe(fusionAppPath: "/no/such/Fusion.app").currentStatus().state == .notInstalled,
+               "sem Fusion = secao vmnet escondida")
+
+        let fusion = temporary.appendingPathComponent("VMware Fusion.app", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: fusion.appendingPathComponent("Contents/Library"),
+            withIntermediateDirectories: true)
+        let vmnetCli = fusion.appendingPathComponent("Contents/Library/vmnet-cli")
+        try "#!/bin/sh\nexit 0".write(toFile: vmnetCli.path, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: vmnetCli.path)
+
+        let pgrepDirectory = temporary.appendingPathComponent("pgrep-running", isDirectory: true)
+        try FileManager.default.createDirectory(at: pgrepDirectory, withIntermediateDirectories: false)
+        let pgrep = pgrepDirectory.appendingPathComponent("pgrep")
+        try "#!/bin/sh\necho 101\necho 102\nexit 0".write(toFile: pgrep.path, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pgrep.path)
+        let running = VmnetProbe(fusionAppPath: fusion.path, pgrepPath: pgrep.path)
+        let (state, vmCount) = running.currentStatus()
+        expect(state == .running && vmCount == 2,
+               "vmnet com daemons = ativo e conta VMs")
+
+        let pgrepIdleDirectory = temporary.appendingPathComponent("pgrep-idle", isDirectory: true)
+        try FileManager.default.createDirectory(at: pgrepIdleDirectory, withIntermediateDirectories: false)
+        let pgrepIdle = pgrepIdleDirectory.appendingPathComponent("pgrep")
+        try "#!/bin/sh\nexit 1".write(toFile: pgrepIdle.path, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pgrepIdle.path)
+        let stopped = VmnetProbe(fusionAppPath: fusion.path, pgrepPath: pgrepIdle.path)
+        expect(stopped.currentStatus().state == .stopped,
+               "vmnet sem daemon = parado")
+
+        let script = running.startScript()
+        expect(script.contains("vmnet-cli") && script.contains("with administrator privileges")
+               && script.contains("--start") && !script.contains("--stop \""),
+               "script de subida pede admin e so sobe")
     }
 
     /// Receitas dos demais runtimes do roadmap, com binarios simulados que

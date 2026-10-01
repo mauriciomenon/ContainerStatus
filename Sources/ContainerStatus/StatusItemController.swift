@@ -14,6 +14,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let cli: ContainerCLI
     /// Sondas read-only dos runtimes do roadmap, ordem fixa de exibicao.
     private let runtimes: [RuntimeProbe]
+    private let vmnet: VmnetProbe
     private let item = NSStatusBar.system.statusItem(withLength: 20)
     private let menu = NSMenu()
     private let pollQueue = DispatchQueue(label: "local.containerstatus.poll", qos: .utility)
@@ -37,6 +38,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Lista (id, memoria) exibida como linhas sob o Status; acompanha a
     /// contagem (mesma chamada de poll). Teto de linhas: 8 + resumo.
     private var containerItems: [ContainerCLI.ContainerSummary] = []
+    /// Rede virtual do VMware (vmnet): estado, VMs e subida em voo.
+    private var vmnetState: VmnetState = .notInstalled
+    private var vmCount = 0
+    private var vmnetBusy = false
     private var cliVersion: String?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
@@ -62,14 +67,18 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let aboutAppleItem = NSMenuItem()
     private let aboutItem = NSMenuItem()
     private let loginItem = NSMenuItem()
+    private let vmnetRowItem = NSMenuItem()
+    private let vmnetActionItem = NSMenuItem()
     private let quitItem = NSMenuItem()
 
     // MARK: Lifecycle
 
     init(cli: ContainerCLI = ContainerCLI(),
-         runtimes: [RuntimeProbe] = RuntimeProbeConfig.standard.map { RuntimeProbe(config: $0) }) {
+         runtimes: [RuntimeProbe] = RuntimeProbeConfig.standard.map { RuntimeProbe(config: $0) },
+         vmnet: VmnetProbe = VmnetProbe()) {
         self.cli = cli
         self.runtimes = runtimes
+        self.vmnet = vmnet
         self.loginEnabled = Self.loginServiceEnabled
         super.init()
         buildMenu()
@@ -94,6 +103,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         headerItem.isEnabled = false
         statusLineItem.isEnabled = false
+        vmnetRowItem.isEnabled = false
+        vmnetActionItem.target = self
+        vmnetActionItem.action = #selector(vmnetClicked(_:))
         for probe in runtimes {
             guard let item = runtimeItems[probe.label] else { continue }
             item.isEnabled = false
@@ -139,6 +151,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.addItem(statusLineItem)
         menu.addItem(actionItem)
         menu.addItem(loginItem)
+        menu.addItem(.separator())
+        menu.addItem(vmnetRowItem)
+        menu.addItem(vmnetActionItem)
         menu.addItem(.separator())
         menu.addItem(aboutAppleItem)
         menu.addItem(aboutItem)
@@ -214,6 +229,37 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                     menu.insertItem(item, at: anchor >= 0 ? anchor + 1 : menu.numberOfItems)
                 }
                 anchorItem = item
+            }
+        }
+
+        // Secao vmnet: so existe com Fusion instalado (regra 5 - remove/
+        // insert aqui, unico caminho). Sem opcao de desligar.
+        if vmnetState == .notInstalled {
+            if vmnetRowItem.menu != nil { menu.removeItem(vmnetRowItem) }
+            if vmnetActionItem.menu != nil { menu.removeItem(vmnetActionItem) }
+        } else {
+            var text = vmnetState == .running ? "VMware vmnet: Ativo" : "VMware vmnet: Parado"
+            if vmCount > 0 {
+                text += vmCount == 1 ? " - 1 VM" : " - \(vmCount) VMs"
+            }
+            vmnetRowItem.title = text
+            vmnetRowItem.isEnabled = false
+            if vmnetBusy {
+                vmnetActionItem.title = "Subindo rede virtual..."
+                vmnetActionItem.isEnabled = false
+            } else {
+                vmnetActionItem.title = "Subir rede virtual (vmnet)"
+                vmnetActionItem.isEnabled = true
+            }
+            if vmnetRowItem.menu == nil || vmnetActionItem.menu == nil {
+                let anchor = menu.index(of: loginItem)
+                let base = anchor >= 0 ? anchor + 1 : menu.numberOfItems
+                if vmnetRowItem.menu == nil {
+                    menu.insertItem(vmnetRowItem, at: base)
+                }
+                if vmnetActionItem.menu == nil {
+                    menu.insertItem(vmnetActionItem, at: menu.index(of: vmnetRowItem) + 1)
+                }
             }
         }
 
@@ -314,7 +360,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// so aceita leituras da epoca corrente.
     private func spawnPoll(sequence: Int) {
         let epoch = mutationEpoch
-        pollQueue.async { [cli, runtimes, weak self] in
+        pollQueue.async { [cli, runtimes, vmnet, weak self] in
             let result = cli.checkStatus()
             // Uma chamada so alimenta contagem e lista do menu.
             let containers = cli.runningContainers()
@@ -331,9 +377,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                     info[probe.label] = tooltip
                 }
             }
+            let vmnetStatus = vmnet.currentStatus()
             Task { @MainActor [weak self] in
                 self?.absorb(poll: result, containers: containers, runtimes: states, info: info,
-                             sequence: sequence, epoch: epoch)
+                             vmnet: vmnetStatus, sequence: sequence, epoch: epoch)
             }
         }
     }
@@ -347,9 +394,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                         containers: [ContainerCLI.ContainerSummary]? = nil,
                         runtimes: [String: ExternalRuntimeState]? = nil,
                         info: [String: String]? = nil,
+                        vmnet: (state: VmnetState, vmCount: Int)? = nil,
                         sequence: Int, epoch: Int = Int.max) {
         guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
+        if let vmnet, vmnetBusy != true {
+            self.vmnetState = vmnet.state
+            self.vmCount = vmnet.vmCount
+        }
         if let containers {
             containerItems = containers
             containerCount = containers.count
@@ -469,6 +521,41 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 self?.finishRuntime(label: label, result: result, state: state)
             }
         }
+    }
+
+    // MARK: Rede virtual (vmnet) - somente subir, nunca derrubar
+
+    @objc private func vmnetClicked(_ sender: NSMenuItem) {
+        guard !vmnetBusy, vmnet.fusionInstalled else { return }
+        vmnetBusy = true
+        detail = nil
+        detailIsLocal = false
+        apply()
+
+        let probe = vmnet
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = probe.start()
+            let status = probe.currentStatus()
+            await MainActor.run { [weak self] in
+                self?.finishVmnet(result: result, state: status.state, vmCount: status.vmCount)
+            }
+        }
+    }
+
+    private func finishVmnet(result: CLIRunResult, state: VmnetState, vmCount: Int) {
+        mutationEpoch += 1
+        vmnetBusy = false
+        vmnetState = state
+        self.vmCount = vmCount
+        if result.succeeded {
+            detail = nil
+            detailIsLocal = false
+        } else {
+            let message = ContainerCLI.firstLine(result.stderr)
+            detail = "vmnet: \(message.isEmpty ? "falha ao subir" : message)"
+            detailIsLocal = true
+        }
+        apply()
     }
 
     /// Mesmo contrato do finish() do Apple container: avanca a barreira de
