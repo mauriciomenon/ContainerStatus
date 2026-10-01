@@ -177,8 +177,10 @@ final class VmnetProbe: Sendable {
     /// Daemon vmnet de pe (natd/dhcpd/bridge) e VMs rodando (vmware-vmx).
     func currentStatus() -> (state: VmnetState, vmCount: Int) {
         guard fusionInstalled else { return (.notInstalled, 0) }
+        // -x (nome exato): -f casaria qualquer processo com "vmnet" nos
+        // argumentos (grep, tail de log) e mentiria "Ativo" com a rede caida.
         let daemons = ContainerCLI.runBinary(pgrepPath,
-                                             arguments: ["-f", "vmnet-(natd|dhcpd|bridge)"],
+                                             arguments: ["-x", "vmnet-(natd|dhcpd|bridge)"],
                                              timeout: Self.statusTimeout)
         let vms = ContainerCLI.runBinary(pgrepPath,
                                          arguments: ["-x", "vmware-vmx"],
