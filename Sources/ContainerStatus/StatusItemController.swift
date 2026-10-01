@@ -297,19 +297,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             for probe in runtimes {
                 let (state, _) = probe.currentStatus()
                 states[probe.label] = state
-                guard state != .notInstalled else { continue }
-                var parts: [String] = []
-                if let runtimeInfo = probe.currentInfo() {
-                    parts.append(runtimeInfo)
-                }
-                if let autoStart = probe.autoStartLabel() {
-                    parts.append("auto-start: \(autoStart)")
-                }
-                if state == .running, let runningCount = probe.runningCount() {
-                    parts.append(runningCount == 1 ? "1 container" : "\(runningCount) containers")
-                }
-                if !parts.isEmpty {
-                    info[probe.label] = parts.joined(separator: "; ")
+                if let tooltip = probe.tooltipInfo(state: state) {
+                    info[probe.label] = tooltip
                 }
             }
             Task { @MainActor [weak self] in
@@ -467,6 +456,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             detailIsLocal = true
         }
         apply()
+        // Tooltip fresco junto (contexto/auto-start/contagem mudam com o
+        // toggle); sondas fora da main, escrita de volta no main actor.
+        guard let probe = runtimes.first(where: { $0.label == label }) else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let tooltip = probe.tooltipInfo(state: state)
+            await MainActor.run { [weak self] in
+                self?.runtimeInfo[label] = tooltip
+                self?.apply()
+            }
+        }
     }
 
     // Regressao opcional de AppKit, sem iniciar polling ou executar a CLI real.

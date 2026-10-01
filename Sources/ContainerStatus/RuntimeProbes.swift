@@ -253,4 +253,23 @@ final class RuntimeProbe: Sendable {
         guard result.succeeded, result.spawned, !result.timedOut else { return nil }
         return result.stdout.split(separator: "\n", omittingEmptySubsequences: true).count
     }
+
+    /// Tooltip composto (contexto, auto-start, contagem de containers) na
+    /// Unica versao verdadeira - spawnPoll, finishRuntime e o diagnostico
+    /// consomem daqui. nil quando nao ha nada a mostrar. Bloqueante: chamar
+    /// fora da main thread.
+    func tooltipInfo(state: ExternalRuntimeState) -> String? {
+        guard state != .notInstalled else { return nil }
+        var parts: [String] = []
+        if let runtimeInfo = currentInfo() {
+            parts.append(runtimeInfo)
+        }
+        if let autoStart = autoStartLabel() {
+            parts.append("auto-start: \(autoStart)")
+        }
+        if state == .running, let runningCount = runningCount() {
+            parts.append(runningCount == 1 ? "1 container" : "\(runningCount) containers")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "; ")
+    }
 }

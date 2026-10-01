@@ -34,16 +34,8 @@ struct AppMain {
             case .stopped: label = "desligado"
             }
             var line = "\(probe.label): \(label)\(path.map { " (\($0))" } ?? "")"
-            if runtimeState != .notInstalled {
-                var parts: [String] = []
-                if let info = probe.currentInfo() { parts.append(info) }
-                if let autoStart = probe.autoStartLabel() {
-                    parts.append("auto-start: \(autoStart)")
-                }
-                if runtimeState == .running, let runningCount = probe.runningCount() {
-                    parts.append(runningCount == 1 ? "1 container" : "\(runningCount) containers")
-                }
-                if !parts.isEmpty { line += " [\(parts.joined(separator: "; "))]" }
+            if runtimeState != .notInstalled, let tooltip = probe.tooltipInfo(state: runtimeState) {
+                line += " [\(tooltip)]"
             }
             print(line)
         }
