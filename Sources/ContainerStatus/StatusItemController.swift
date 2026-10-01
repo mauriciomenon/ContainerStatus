@@ -613,7 +613,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         toggleController.runtimeToggled(toggleRow())
         expect(toggleRow().title == "Colima: Alternando..." && toggleRow().isEnabled == false,
                "toggle em voo mostra Alternando e desabilita a linha")
-        let toggleDeadline = Date().addingTimeInterval(5)
+        var toggleDeadline = Date().addingTimeInterval(5)
         while Date() < toggleDeadline && toggleController.runtimeStates["Colima"] != .running {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
@@ -745,7 +745,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         defer { pollingController.pollTimer?.cancel() }
         var transitions = 0
         var lastObserved = pollingController.state
-        var flipDeadline = Date().addingTimeInterval(5)
+        let flipDeadline = Date().addingTimeInterval(5)
         while Date() < flipDeadline && transitions < 3 {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
             if pollingController.state != lastObserved {
