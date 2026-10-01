@@ -167,13 +167,16 @@ dimensoes explicitas de bitmap e independe da escala da tela.
 
 ## Testes focados
 
-`--selftest` executa 38 checagens do nucleo: estados, watchdog, parada
-lenta, descoberta da CLI, cache e concorrencia durante upgrades.
-`--selftest-ui` inclui mais 13 checagens do menu: insercao, atualizacao e
+`--selftest` executa 61 checagens do nucleo: estados, watchdog, parada
+lenta, descoberta da CLI, cache e concorrencia durante upgrades, sondas
+de runtimes externos e controle com stubs stateful.
+`--selftest-ui` inclui mais 26 checagens de menu: insercao, atualizacao e
 remocao da linha de erro, retencao de erro local de toggle apos polls
 saudaveis, substituicao por diagnostico do polling, ordem de checagens em
-voo (sequencia e epoca de mutacao) e insercao com anchor degradado. Exige uma sessao
-grafica do macOS; nao abre o menu nem altera o daemon ou o login.
+voo (sequencia e epoca de mutacao), insercao com anchor degradado, ciclo
+de vida das linhas de runtime, toggles (incluindo leitura fresca e subida
+atrasada) e poll periodico vivo por multiplos ciclos. Exige uma sessao
+grafica do macOS; nao abre o menu nem altera o daemon, os runtimes ou o login.
 Os dois modos encerram o processo com codigo diferente de zero se falharem.
 
 `validate_assets.sh` verifica as 10 imagens internas do ICNS, dimensoes,

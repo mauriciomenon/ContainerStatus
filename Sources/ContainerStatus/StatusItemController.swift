@@ -278,7 +278,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         pollQueue.async { [cli, runtimes, weak self] in
             let result = cli.checkStatus()
             // Sondas read-only em serie no pollQueue: cada uma com watchdog
-            // proprio de 2s. Quem nao esta instalado custa so stat.
+            // proprio de 2s (pior caso por sonda travada ~5.5s com kill e
+            // teto de IO; nominal < 1s para as 3 CLIs reais). Quem nao esta
+            // instalado custa so stat. Paralelizar so se virar queixa real.
             var states: [String: ExternalRuntimeState] = [:]
             var info: [String: String] = [:]
             for probe in runtimes {
