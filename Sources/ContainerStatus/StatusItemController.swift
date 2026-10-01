@@ -57,7 +57,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let statusLineItem = NSMenuItem()
     /// Linhas dos containers de pe (pool reutilizado, teto 8 + resumo).
     private var containerRowItems: [NSMenuItem] = []
-    private let containerOverflowItem = NSMenuItem()
     /// Uma linha informativa por runtime, criada sob demanda em apply().
     private lazy var runtimeItems: [String: NSMenuItem] = Dictionary(
         uniqueKeysWithValues: runtimes.map { ($0.label, NSMenuItem()) }
