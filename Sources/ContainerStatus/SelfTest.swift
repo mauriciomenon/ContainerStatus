@@ -187,6 +187,33 @@ enum SelfTest {
         expect(stopped.succeeded && Date().timeIntervalSince(started) >= 10,
                "parada simulada superior a 10s conclui sem watchdog")
 
+        // Contagem de containers rodando (ls --format json): parse do array,
+        // vazio = 0, falha = nil.
+        let countDirectory = temporary.appendingPathComponent("count", isDirectory: true)
+        try FileManager.default.createDirectory(at: countDirectory, withIntermediateDirectories: false)
+        func writeContainerStub(_ stdout: String, exitCode: Int) throws {
+            let script = """
+            #!/bin/sh
+            if [ "$1" = "ls" ] && [ "$2" = "--format" ]; then
+              cat <<'EOF'
+            \(stdout)
+            EOF
+              exit \(exitCode)
+            fi
+            exit 0
+            """
+            let path = countDirectory.appendingPathComponent("container").path
+            try script.write(toFile: path, atomically: false, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        }
+        let countingCLI = ContainerCLI(directories: [countDirectory.path])
+        try writeContainerStub("[{\"id\":\"a\"},{\"id\":\"b\"}]", exitCode: 0)
+        expect(countingCLI.containerCount() == 2, "ls com dois containers = 2")
+        try writeContainerStub("[]", exitCode: 0)
+        expect(countingCLI.containerCount() == 0, "ls vazio = 0")
+        try writeContainerStub("erro", exitCode: 1)
+        expect(countingCLI.containerCount() == nil, "ls falho = nil")
+
         try checkColima(in: temporary, expect: expect)
         try checkRuntimeRecipes(in: temporary, expect: expect)
     }

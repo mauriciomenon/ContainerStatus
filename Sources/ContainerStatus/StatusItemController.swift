@@ -32,6 +32,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Informacao de planta por runtime (passo 3 parcial), ex. contexto do
     /// docker; vai para o tooltip da linha.
     private var runtimeInfo: [String: String] = [:]
+    /// Containers rodando no Apple container (nil quando a CLI nao responde).
+    private var containerCount: Int?
     private var cliVersion: String?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
@@ -205,6 +207,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         headerItem.title = "Apple Container\(versionSuffix)"
         aboutItem.title = "Sobre ContainerStatus\(appVersion.map { " \($0)" } ?? "")"
 
+        // Sufixo de carga: "Status: Ligado (2 containers)" quando a CLI
+        // respondeu a contagem; singular, plural e ausente (CLI muda) tratados.
+        func statusSuffix() -> String {
+            guard let containerCount else { return "" }
+            if containerCount == 1 { return " (1 container)" }
+            return " (\(containerCount) containers)"
+        }
+
         if activity != .none {
             statusLineItem.title = state == .running ? "Status: Ligado" : "Status: Desligado"
             actionItem.title = "Alternando..."
@@ -213,7 +223,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         } else {
             switch state {
             case .running:
-                statusLineItem.title = "Status: Ligado"
+                statusLineItem.title = "Status: Ligado\(statusSuffix())"
                 actionItem.title = "Desligar daemon"
                 actionItem.isEnabled = true
                 actionItem.state = .off
@@ -277,6 +287,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let epoch = mutationEpoch
         pollQueue.async { [cli, runtimes, weak self] in
             let result = cli.checkStatus()
+            let count = cli.containerCount()
             // Sondas read-only em serie no pollQueue: cada uma com watchdog
             // proprio de 2s (pior caso por sonda travada ~5.5s com kill e
             // teto de IO; nominal < 1s para as 3 CLIs reais). Quem nao esta
@@ -299,7 +310,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 }
             }
             Task { @MainActor [weak self] in
-                self?.absorb(poll: result, runtimes: states, info: info,
+                self?.absorb(poll: result, count: count, runtimes: states, info: info,
                              sequence: sequence, epoch: epoch)
             }
         }
@@ -311,11 +322,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     private func absorb(poll: (state: ServiceState, detail: String?),
+                        count: Int? = nil,
                         runtimes: [String: ExternalRuntimeState]? = nil,
                         info: [String: String]? = nil,
                         sequence: Int, epoch: Int = Int.max) {
         guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
+        if let count {
+            self.containerCount = count
+        }
         if let runtimes {
             self.runtimeStates = runtimes
         }

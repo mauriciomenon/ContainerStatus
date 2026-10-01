@@ -204,6 +204,21 @@ final class ContainerCLI: Sendable {
         run(["system", "stop"], timeout: Self.stopTimeout)
     }
 
+    /// Contagem de containers rodando (`container ls --format json` lista os
+    /// ativos por padrao). nil quando a CLI nao responde - a linha de status
+    /// fica sem sufixo em vez de mentir. Read-only, watchdog do status.
+    func containerCount() -> Int? {
+        refreshBinaryPathIfNeeded()
+        guard resolvedBinaryPath != nil else { return nil }
+        let result = run(["ls", "--format", "json"], timeout: Self.statusTimeout)
+        guard result.succeeded, result.spawned, !result.timedOut,
+              let data = result.stdout.data(using: .utf8),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [Any] else {
+            return nil
+        }
+        return list.count
+    }
+
     // MARK: Process plumbing
 
     /// Runs an arbitrary binary (used by the self-test against foreign
