@@ -15,7 +15,7 @@ controla o servico Apple `container` (github.com/apple/container).
 Apple Container x.y.z            versao da CLI em uso
 /usr/local/bin/container         caminho resolvido; "destino via symlink"
                                  quando a instalacao e um link (ex.: brew)
-─────────────────────────────
+-----------------------------
 Status: Ligado (2 containers)   contagem de containers rodando
 Status: Ligado / Desligado / Nao instalado
 Colima / Docker / Podman /      linha por runtime instalado; clicavel
@@ -25,7 +25,7 @@ Lume / OrbStack: ...            onde ha controle (ROADMAP passo 2);
 Ligar daemon / Desligar daemon   sem a CLI, vira o link do projeto
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Abrir no login                   (SMAppService, sem permissoes extras)
-─────────────────────────────
+-----------------------------
 Sobre Apple Container            abre github.com/apple/container
 Sobre ContainerStatus x.y.z      painel Sobre do app
 Sair
