@@ -1,4 +1,5 @@
 import AppKit
+import os
 import ServiceManagement
 
 /// Owns the status bar item, the menu, and the idle/starting/stopping state
@@ -238,11 +239,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private func startPolling(every interval: TimeInterval = 3) {
         let timer = DispatchSource.makeTimerSource(queue: pollQueue)
         timer.schedule(deadline: .now() + interval, repeating: interval)
-        timer.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in
-                // O poll periodico e a fonte de verdade: usa sequence alto
-                // para nao ser descartado pelo guard de ordem.
-                self?.spawnPoll(sequence: Int.max)
+        timer.setEventHandler { @Sendable [weak self] in
+            // A classe e @MainActor e o handler roda na pollQueue: a volta a
+            // main passa pela main queue com assumeIsolated (a main queue
+            // so executa na main thread). A sequencia vem de contador
+            // compartilhado (lock) - a antiga sentinela Int.max envenenava
+            // o guard de ordem apos o primeiro ciclo e congelava o poll
+            // para sempre.
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.spawnPoll(sequence: (self?.nextSequence()) ?? 0)
+                }
             }
         }
         timer.resume()
@@ -252,11 +259,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Identifica checagens em voo: resultados velhos (timer + menu aberto)
     /// podem chegar fora de ordem; o mais recente vence e um mais antigo que
     /// chegue depois e descartado.
-    private var pollSequence = 0
+    private let sequenceLock = OSAllocatedUnfairLock(initialState: 0)
     private var lastAppliedSequence = -1
-    /// Barreira de mutacao: finish() avanca a epoca e toda leitura em voo
-    /// iniciada antes dela (inclusive o poll periodico, cujo sequence Int.max
-    /// passa pelo guard de ordem) e descartada no absorb.
+
+    private func nextSequence() -> Int {
+        sequenceLock.withLock { value in
+            value += 1
+            return value
+        }
+    }    /// Barreira de mutacao: finish()/finishRuntime() avancam a epoca e toda
+    /// leitura em voo iniciada antes da mutacao e descartada no absorb.
     private var mutationEpoch = 0
 
     /// Captura a epoca no main actor ANTES de enfileirar a leitura; o absorb
@@ -285,8 +297,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     /// One-shot background check (used when the menu opens).
     func refreshNow() {
-        pollSequence += 1
-        spawnPoll(sequence: pollSequence)
+        spawnPoll(sequence: nextSequence())
     }
 
     private func absorb(poll: (state: ServiceState, detail: String?),
@@ -598,6 +609,50 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(toggleController.runtimeStates["Colima"] == .stopped
                && toggleController.errorItem.menu == nil,
                "toggle decide a direcao por leitura fresca, nao pelo menu velho")
+
+        // Poll periodico vivo: o estado acompanha os flips da CLI por
+        // multiplos ciclos. Regressao do P1 da revisao dev: a sentinela
+        // Int.max envenenava lastAppliedSequence e congelava o poll apos o
+        // primeiro absorb (o dot parava de acompanhar o daemon de verdade).
+        // Nota: o loop abaixo drena o RunLoop para que os jobs @MainActor
+        // do timer executem; no harness de CLI eles podem rodar em thread
+        // cooperativa (warnings de data race sao artefato do harness - no
+        // app de verdade o NSApplication.run bombeia a MainActor na main
+        // thread). A serializacao do actor garante ausencia de corrida.
+        let flipDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cs_flip_\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: flipDirectory, withIntermediateDirectories: false)
+        let flipScript = """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then echo "container CLI version 1.0.0"; exit 0; fi
+        if [ "$1" = "system" ] && [ "$2" = "status" ]; then
+          n=$(cat "$0.n" 2>/dev/null || echo 0)
+          n=$((n+1)); echo $n > "$0.n"
+          [ $((n % 2)) -eq 1 ] && exit 0 || exit 1
+        fi
+        exit 0
+        """
+        let flipPath = flipDirectory.appendingPathComponent("container").path
+        try? flipScript.write(toFile: flipPath, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: flipPath)
+        let pollingController = StatusItemController(
+            cli: ContainerCLI(directories: [flipDirectory.path]), runtimes: [])
+        pollingController.item.isVisible = false
+        defer { NSStatusBar.system.removeStatusItem(pollingController.item) }
+        pollingController.startPolling(every: 0.2)
+        defer { pollingController.pollTimer?.cancel() }
+        var transitions = 0
+        var lastObserved = pollingController.state
+        var flipDeadline = Date().addingTimeInterval(5)
+        while Date() < flipDeadline && transitions < 3 {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            if pollingController.state != lastObserved {
+                transitions += 1
+                lastObserved = pollingController.state
+            }
+        }
+        expect(transitions >= 3,
+               "poll periodico acompanha os flips da CLI por multiplos ciclos")
     }
 
     // MARK: Launch at login
