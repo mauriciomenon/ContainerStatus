@@ -15,7 +15,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Sondas read-only dos runtimes do roadmap, ordem fixa de exibicao.
     private let runtimes: [RuntimeProbe]
     private let vmnet: VmnetProbe
-    private let item = NSStatusBar.system.statusItem(withLength: 20)
+    /// Comprimento justo: canvas 12 + o chrome do sistema. O ponto continua
+    /// com 9 pt - so o espaco morto em volta encolheu.
+    private let item = NSStatusBar.system.statusItem(withLength: 14)
     private let menu = NSMenu()
     private let pollQueue = DispatchQueue(label: "local.containerstatus.poll", qos: .utility)
 
@@ -1115,14 +1117,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     /// Draws the status dot: filled green/red, hollow gray when the CLI is
-    /// unavailable, dimmed while a toggle is in flight. The image is compact
-    /// (16 px) inside a narrow status item so it takes little menu bar width,
-    /// while the dot itself stays large and readable.
+    /// unavailable, dimmed while a toggle is in flight. Canvas 12 px com o
+    /// circulo de 9 px no mesmo tamanho de antes - cortei so a margem
+    /// transparente que fazia o item ocupar mais barra do que precisa.
     private static func drawDot(state: ServiceState, dimmed: Bool) -> NSImage {
-        let side: CGFloat = 16
+        let side: CGFloat = 12
         let alpha: CGFloat = dimmed ? 0.45 : 1.0
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 3.5, dy: 3.5))
+            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 1.5, dy: 1.5))
             switch state {
             case .running:
                 NSColor.systemGreen.withAlphaComponent(alpha).setFill()
