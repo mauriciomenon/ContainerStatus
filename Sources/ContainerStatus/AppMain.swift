@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ServiceManagement
 
 @main
 struct AppMain {
@@ -7,6 +8,15 @@ struct AppMain {
     static func main() {
         if CommandLine.arguments.contains("--probe-runtimes") {
             Self.probeRuntimesAndExit()
+        }
+        if CommandLine.arguments.contains("--unregister-login") {
+            // Manutencao: remove o registro de login DESTE bundle (identidade
+            // do proprio app). Serve para limpar cadaveres do BTM: reencarne
+            // o bundle antigo no caminho memorizado e rode esta flag.
+            exit(Self.setLogin(register: false))
+        }
+        if CommandLine.arguments.contains("--register-login") {
+            exit(Self.setLogin(register: true))
         }
         let includeUI = CommandLine.arguments.contains("--selftest-ui")
         if includeUI || CommandLine.arguments.contains("--selftest") {
@@ -40,5 +50,34 @@ struct AppMain {
             print(line)
         }
         exit(0)
+    }
+
+    /// Registro/desregistro do login item DESTE bundle, para manutencao.
+    /// Retorna codigo de saida: 0 ok, 1 falhou, 2 exige aprovacao do usuario.
+    @MainActor
+    static func setLogin(register: Bool) -> Int32 {
+        let service = SMAppService.mainApp
+        do {
+            if register {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+            print("ok: status agora e \(describeLogin(service.status))")
+            return 0
+        } catch {
+            print("falha (\(register ? "registrar" : "desregistrar")): \(error.localizedDescription)")
+            return 1
+        }
+    }
+
+    private static func describeLogin(_ status: SMAppService.Status) -> String {
+        switch status {
+        case .enabled: return "habilitado"
+        case .requiresApproval: return "exige aprovacao no painel"
+        case .notRegistered: return "nao registrado"
+        case .notFound: return "nao encontrado"
+        @unknown default: return "desconhecido (\(status.rawValue))"
+        }
     }
 }
