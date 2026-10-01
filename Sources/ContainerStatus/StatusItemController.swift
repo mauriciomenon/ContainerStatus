@@ -50,7 +50,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var pollTimer: DispatchSourceTimer?
     /// Checkmark do login vem daqui; SMAppService faz round-trip XPC, entao
     /// o cache e renovado so ao abrir o menu e no proprio toggle.
-    private var loginEnabled: Bool
+    /// Cache do status do login item (marcado, desmarcado ou pendente de
+    /// aprovacao); renovado ao abrir o menu e no proprio toggle.
+    private var loginStatusCache: SMAppService.Status = .notRegistered
 
     // Menu items, kept as references so state changes mutate them in place.
     private let headerItem = NSMenuItem()
@@ -82,8 +84,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         self.cli = cli
         self.runtimes = runtimes
         self.vmnet = vmnet
-        self.loginEnabled = Self.loginServiceEnabled
         super.init()
+        loginStatusCache = Self.loginStatus
         buildMenu()
         item.menu = menu
         item.button?.image = Self.dotImage(state: state, dimmed: false)
@@ -318,7 +320,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
 
-        loginItem.state = loginEnabled ? .on : .off
+        let loginPending = loginStatusCache == .requiresApproval
+        loginItem.title = loginPending ? "Abrir no login - aprove no painel" : "Abrir no login"
+        loginItem.state = loginStatusCache == .enabled ? .on : .off
         loginItem.isEnabled = true
     }
 
@@ -436,7 +440,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        loginEnabled = Self.loginServiceEnabled
+        loginStatusCache = Self.loginStatus
         refreshNow()
         if activity == .none { apply() }
     }
@@ -550,7 +554,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         vmnetBusy = false
         vmnetState = state
         self.vmCount = vmCount
-        if result.succeeded {
+        // Cancelar o dialogo de senha nao e falha: sai silencioso.
+        let canceled = result.exitCode == 2 || result.stderr.contains("User canceled")
+        if result.succeeded || canceled {
             detail = nil
             detailIsLocal = false
         } else {
@@ -753,6 +759,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(withFusion.vmnetRowItem.menu == nil && !hasConsecutiveSeparators(menu),
                "vmnet removido sai do menu sem separadores orfaos")
 
+        // Cancelar o dialogo de senha do vmnet nao e falha: sem linha de
+        // erro e sem retencao local.
+        withFusion.finishVmnet(result: CLIRunResult(exitCode: 2, spawned: true,
+                                                    stderr: "execution error: User canceled. (-128)"),
+                               state: .running, vmCount: 1)
+        expect(withFusion.errorItem.menu == nil && withFusion.detailIsLocal == false,
+               "cancelar vmnet sai sem linha de erro")
+
         // Linha read-only do colima: entra abaixo do Status quando o binario
         // existe e some quando ele desaparece (insert/remove em apply, regra 5).
         let colimaController = StatusItemController(
@@ -950,19 +964,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // MARK: Launch at login
 
-    private static var loginServiceEnabled: Bool {
-        guard #available(macOS 13.0, *) else { return false }
-        return SMAppService.mainApp.status == .enabled
+    private static var loginStatus: SMAppService.Status {
+        guard #available(macOS 13.0, *) else { return .notRegistered }
+        return SMAppService.mainApp.status
     }
 
     @objc private func toggleLogin(_ sender: NSMenuItem) {
         let service = SMAppService.mainApp
         if service.status == .requiresApproval {
             // Ja registrado, esperando o slider: o clique guia para o painel
-            // no ponto certo em vez de repetir um erro de aprovacao.
+            // no ponto certo. A linha do login ja anuncia o pendente; nao e
+            // erro, entao nada de linha de diagnostico com retencao.
             SMAppService.openSystemSettingsLoginItems()
-            detail = "Login: aprove no painel que abriu"
-            detailIsLocal = true
+            loginStatusCache = Self.loginStatus
             apply()
             return
         }
@@ -976,7 +990,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             detail = "Login: \(error.localizedDescription)"
             detailIsLocal = true
         }
-        loginEnabled = Self.loginServiceEnabled
+        loginStatusCache = Self.loginStatus
         apply()
     }
 
