@@ -957,6 +957,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     @objc private func toggleLogin(_ sender: NSMenuItem) {
         let service = SMAppService.mainApp
+        if service.status == .requiresApproval {
+            // Ja registrado, esperando o slider: o clique guia para o painel
+            // no ponto certo em vez de repetir um erro de aprovacao.
+            SMAppService.openSystemSettingsLoginItems()
+            detail = "Login: aprove no painel que abriu"
+            detailIsLocal = true
+            apply()
+            return
+        }
         do {
             if service.status == .enabled {
                 try service.unregister()
