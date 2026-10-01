@@ -295,5 +295,32 @@ enum SelfTest {
         try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0)
         expect(RuntimeProbe(config: .colima, directories: [stoppedDirectory.path]).resolvedPath() != nil,
                "caminho do colima acompanha candidato")
+
+        // Controle (passo 2): start/stop da sonda mutam o estado simulado e o
+        // status acompanha. Deterministico, sem UI.
+        let controllable = RuntimeProbe(config: .colima, directories: [stoppedDirectory.path])
+        try writeColima(at: stoppedDirectory.appendingPathComponent("colima"), exitCode: 1)
+        let controlScript = """
+        #!/bin/sh
+        case "$1" in
+          start) touch "$0.state"; exit 0 ;;
+          stop) rm -f "$0.state"; exit 0 ;;
+          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
+        esac
+        """
+        let controlPath = stoppedDirectory.appendingPathComponent("colima").path
+        try controlScript.write(toFile: controlPath, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: controlPath)
+        expect(controllable.isControllable, "receita de controle habilita toggle")
+        expect(controllable.currentStatus().state == .stopped, "antes do start = desligado")
+        expect(controllable.start().succeeded, "start do runtime tem exit 0")
+        expect(controllable.currentStatus().state == .running, "apos start = ligado")
+        expect(controllable.stop().succeeded, "stop do runtime tem exit 0")
+        expect(controllable.currentStatus().state == .stopped, "apos stop = desligado")
+
+        // Sem receita (docker read-only): start/stop nao executam nada.
+        let readOnly = RuntimeProbe(config: .docker, directories: [stoppedDirectory.path])
+        expect(!readOnly.isControllable, "docker read-only nao tem controle")
+        expect(!readOnly.start().succeeded, "start de runtime read-only nao executa")
     }
 }
