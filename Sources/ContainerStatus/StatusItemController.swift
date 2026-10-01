@@ -86,23 +86,30 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let errorItem = NSMenuItem()
     /// Rodape: About (esquerda) e Quit (direita) na mesma linha.
     private let footerItem = NSMenuItem()
+    @MainActor
     private lazy var footerView: NSView = {
-        let aboutButton = NSButton(title: "About", target: self, action: #selector(showAbout(_:)))
-        aboutButton.isBordered = false
-        aboutButton.font = NSFont.menuFont(ofSize: 13)
-        let quitButton = NSButton(title: "Quit", target: self, action: #selector(quitClicked(_:)))
-        quitButton.isBordered = false
-        quitButton.font = NSFont.menuFont(ofSize: 13)
+        @MainActor func footerButton(_ title: String, _ action: Selector) -> NSButton {
+            let button = NSButton(title: title, target: self, action: action)
+            button.isBordered = false
+            button.font = NSFont.menuFont(ofSize: 13)
+            button.contentTintColor = .labelColor
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
+            return button
+        }
+        let aboutButton = footerButton("About", #selector(showAbout(_:)))
+        let quitButton = footerButton("Quit", #selector(quitClicked(_:)))
         let stack = NSStackView(views: [aboutButton, NSView(), quitButton])
         stack.orientation = .horizontal
-        stack.spacing = 4
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        stack.alignment = .centerY
+        stack.spacing = 8
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
-            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 2),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2),
         ])
         footerItem.view = container
         return container
@@ -110,22 +117,27 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Cabecalho: titulo a esquerda, ⟳ de varedura no canto direito.
     private let headerViewItem = NSMenuItem()
     private lazy var headerView: NSView = {
-        let label = NSTextField(labelWithString: "Container Status")
+        let label = NSTextField(labelWithString: "Container Status \(appVersion ?? "")")
         label.font = NSFont.boldSystemFont(ofSize: 13)
+        label.textColor = .labelColor
         let rescanButton = NSButton(title: "⟳", target: self, action: #selector(headerClicked(_:)))
         rescanButton.isBordered = false
-        rescanButton.font = NSFont.boldSystemFont(ofSize: 16)
+        rescanButton.font = NSFont.systemFont(ofSize: 15, weight: .medium)
+        rescanButton.contentTintColor = .secondaryLabelColor
         rescanButton.toolTip = "Rescan detections"
+        // Area de clique generosa: o glifo e pequeno, o botao nao.
+        rescanButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 26).isActive = true
         let stack = NSStackView(views: [label, NSView(), rescanButton])
         stack.orientation = .horizontal
-        stack.spacing = 6
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        stack.spacing = 8
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
-            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 3),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -3),
         ])
         headerViewItem.view = container
         return container
@@ -327,7 +339,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                     actionItem.indentationLevel = 2
                     actionItem.attributedTitle = NSAttributedString(
                         string: actionItem.title,
-                        attributes: [.font: NSFont.menuFont(ofSize: 11)])
+                        attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)])
                     place(actionItem, present: true)
                 } else {
                     place(actionItem, present: false)
