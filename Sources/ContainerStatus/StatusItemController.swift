@@ -15,9 +15,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Sondas read-only dos runtimes do roadmap, ordem fixa de exibicao.
     private let runtimes: [RuntimeProbe]
     private let vmnet: VmnetProbe
-    /// Comprimento justo: canvas 12 com ponto de 7.5 pt. Menor opcao antes
-    /// de o glass do sistema comecar a recortar o circulo.
-    private let item = NSStatusBar.system.statusItem(withLength: 12)
+    /// Comprimento no estilo Stats: ponto de 7.5 pt quase colado na borda
+    /// do canvas 9 - sem margem morta, o glass do sistema da o resto.
+    private let item = NSStatusBar.system.statusItem(withLength: 10)
     private let menu = NSMenu()
     private let pollQueue = DispatchQueue(label: "local.containerstatus.poll", qos: .utility)
 
@@ -1117,13 +1117,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     /// Draws the status dot: filled green/red, hollow gray when the CLI is
-    /// unavailable, dimmed while a toggle is in flight. Canvas 12 px com
-    /// circulo de 7.5 pt - versao compacta pedida pelo usuario.
+    /// unavailable, dimmed while a toggle is in flight. Canvas 9 px com o
+    /// circulo de 7.5 pt na borda - a margem morta do canvas era o espaco
+    /// que fazia o item parecer largo perto do Stats.
     private static func drawDot(state: ServiceState, dimmed: Bool) -> NSImage {
-        let side: CGFloat = 12
+        let side: CGFloat = 9
         let alpha: CGFloat = dimmed ? 0.45 : 1.0
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 2.25, dy: 2.25))
+            let circle = NSBezierPath(ovalIn: rect.insetBy(dx: 0.75, dy: 0.75))
             switch state {
             case .running:
                 NSColor.systemGreen.withAlphaComponent(alpha).setFill()
