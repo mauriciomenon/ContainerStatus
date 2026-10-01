@@ -84,13 +84,58 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let vmnetRowItem = NSMenuItem()
     private let vmnetActionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
-    private let aboutItem = NSMenuItem()
-    private let quitItem = NSMenuItem()
+    /// Rodape: About (esquerda) e Quit (direita) na mesma linha.
+    private let footerItem = NSMenuItem()
+    private lazy var footerView: NSView = {
+        let aboutButton = NSButton(title: "About", target: self, action: #selector(showAbout(_:)))
+        aboutButton.isBordered = false
+        aboutButton.font = NSFont.menuFont(ofSize: 13)
+        let quitButton = NSButton(title: "Quit", target: self, action: #selector(quitClicked(_:)))
+        quitButton.isBordered = false
+        quitButton.font = NSFont.menuFont(ofSize: 13)
+        let stack = NSStackView(views: [aboutButton, NSView(), quitButton])
+        stack.orientation = .horizontal
+        stack.spacing = 4
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+        footerItem.view = container
+        return container
+    }()
+    /// Cabecalho: titulo a esquerda, ⟳ de varedura no canto direito.
+    private let headerViewItem = NSMenuItem()
+    private lazy var headerView: NSView = {
+        let label = NSTextField(labelWithString: "Container Status")
+        label.font = NSFont.boldSystemFont(ofSize: 13)
+        let rescanButton = NSButton(title: "⟳", target: self, action: #selector(headerClicked(_:)))
+        rescanButton.isBordered = false
+        rescanButton.font = NSFont.boldSystemFont(ofSize: 16)
+        rescanButton.toolTip = "Rescan detections"
+        let stack = NSStackView(views: [label, NSView(), rescanButton])
+        stack.orientation = .horizontal
+        stack.spacing = 6
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+        headerViewItem.view = container
+        return container
+    }()
     private let sepDocker = NSMenuItem.separator()
     private let sepPodman = NSMenuItem.separator()
     private let sepLume = NSMenuItem.separator()
     private let sepVmnet = NSMenuItem.separator()
     private let tailSep = NSMenuItem.separator()
+    private let firstSep = NSMenuItem.separator()
 
     // MARK: Lifecycle
 
@@ -122,20 +167,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.autoenablesItems = false
         menu.delegate = self
 
-        // Cabecalho clicavel: varedura completa de deteccao (⟳).
-        headerItem.isEnabled = true
-        headerItem.target = self
-        headerItem.action = #selector(headerClicked(_:))
-
         appleRowItem.isEnabled = false
         statusLineItem.isEnabled = false
+        statusLineItem.indentationLevel = 1
         actionItem.target = self
         actionItem.action = #selector(actionClicked(_:))
         githubItem.title = "GitHub"
+        githubItem.indentationLevel = 1
         githubItem.target = self
         githubItem.action = #selector(openAppleAbout(_:))
         dockerRowItem.isEnabled = false
+        dockerRowItem.indentationLevel = 1
         dockerDetectItem.isEnabled = false
+        dockerDetectItem.indentationLevel = 1
         for probe in runtimes {
             guard let row = subStatusItems[probe.label] else { continue }
             row.isEnabled = false
@@ -154,29 +198,23 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         vmnetActionItem.target = self
         vmnetActionItem.action = #selector(vmnetClicked(_:))
         errorItem.isEnabled = false
-        aboutItem.title = "About."
-        aboutItem.target = self
-        aboutItem.action = #selector(showAbout(_:))
         loginItem.title = "Open at Login"
         loginItem.target = self
         loginItem.action = #selector(toggleLogin(_:))
 
-        quitItem.title = "Quit"
-        quitItem.action = #selector(NSApplication.terminate(_:))
-
+        _ = headerView
+        _ = footerView
         rebuildMenu()
     }
 
-    /// Esqueleto fixo: cabecalho, login, e a cauda About/Quit. Todo o resto
-    /// e zona dinamica que o apply() reconstrói em ordem canonica.
+    /// Esqueleto fixo: cabecalho com ⟳ no canto direito, e o rodape
+    /// About/Quit com o login na penultima linha. Todo o resto e zona
+    /// dinamica que o apply() reconstroi em ordem canonica.
     private func rebuildMenu() {
         menu.removeAllItems()
-        menu.addItem(headerItem)
-        menu.addItem(.separator())
-        menu.addItem(loginItem)
-        menu.addItem(tailSep)
-        menu.addItem(aboutItem)
-        menu.addItem(quitItem)
+        menu.addItem(headerViewItem)
+        menu.addItem(firstSep)
+        menu.addItem(footerItem)
         apply()
     }
 
@@ -187,10 +225,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// caminho (regra 5).
     private func apply() {
         item.button?.image = Self.dotImage(state: state, dimmed: activity != .none)
-        headerItem.title = "Container Status \(appVersion ?? "") ⟳"
-        headerItem.toolTip = "Click to rescan detections"
 
-        var anchorItem = loginItem  // ultimo item fixo do cabecalho
+        var anchorItem = firstSep  // ultimo item fixo antes da zona dinamica
 
         func place(_ item: NSMenuItem, present: Bool) {
             if present {
@@ -202,13 +238,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             } else if item.menu != nil {
                 menu.removeItem(item)
             }
-        }
-
-        if let detail, !detail.isEmpty {
-            errorItem.title = detail
-            place(errorItem, present: true)
-        } else {
-            place(errorItem, present: false)
         }
 
         // ---- Bloco Apple Container ----
@@ -223,6 +252,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 .font: NSFont.menuFont(ofSize: 10),
                 .foregroundColor: NSColor.secondaryLabelColor,
             ])
+            pathItem.indentationLevel = 1
             pathItem.isEnabled = false
         }
         place(pathItem, present: pathDisplay != nil)
@@ -240,6 +270,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             row.title = container.memoryBytes.map {
                 "\(container.id) - \($0 / 1_048_576) MB"
             } ?? container.id
+            row.indentationLevel = 1
             place(row, present: true)
         }
         for row in containerRowItems.dropFirst(visibleContainers.count) {
@@ -250,6 +281,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             ? "Working..."
             : (state == .running ? "Disable Daemon" : "Enable Daemon")
         actionItem.title = actionLabel
+        actionItem.indentationLevel = 1
         actionItem.isEnabled = activity == .none && state != .notInstalled
         place(actionItem, present: state != .notInstalled)
         place(githubItem, present: true)
@@ -278,18 +310,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                     string: statusItem.title,
                     attributes: [.font: NSFont.menuFont(ofSize: 11),
                                  .foregroundColor: NSColor.secondaryLabelColor])
-                statusItem.indentationLevel = 1
+                statusItem.indentationLevel = 2
                 statusItem.isEnabled = false
                 place(statusItem, present: true)
                 if config.control != nil {
                     if runtimeActivity[config.label] == true {
                         actionItem.title = "Working..."
                         actionItem.isEnabled = false
+                    } else if config.appBased {
+                        actionItem.title = subState == .running ? "Stop \(config.label)" : "Start \(config.label)"
+                        actionItem.isEnabled = true
                     } else {
                         actionItem.title = subState == .running ? "Disable Daemon" : "Enable Daemon"
                         actionItem.isEnabled = true
                     }
-                    actionItem.indentationLevel = 1
+                    actionItem.indentationLevel = 2
                     actionItem.attributedTitle = NSAttributedString(
                         string: actionItem.title,
                         attributes: [.font: NSFont.menuFont(ofSize: 11)])
@@ -311,6 +346,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if podmanState != .notInstalled {
             podmanRowItem.title = "Podman: \(podmanState == .running ? "Running" : "Not Running")"
             podmanRowItem.toolTip = podmanProbe.flatMap { $0.tooltipInfo(state: podmanState) }
+            podmanRowItem.indentationLevel = 1
             if runtimeActivity["Podman"] == true {
                 podmanActionItem.title = "Working..."
                 podmanActionItem.isEnabled = false
@@ -318,6 +354,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 podmanActionItem.title = podmanState == .running ? "Disable Daemon" : "Enable Daemon"
                 podmanActionItem.isEnabled = true
             }
+            podmanActionItem.indentationLevel = 1
         }
 
         // ---- Lume (bloco proprio, sem toggle) ----
@@ -328,9 +365,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if lumeState != .notInstalled {
             lumeRowItem.title = "Lume: \(lumeState == .running ? "Running" : "Not Running")"
             lumeRowItem.toolTip = lumeProbe.flatMap { $0.tooltipInfo(state: lumeState) }
+            lumeRowItem.indentationLevel = 1
             lumeRowItem.isEnabled = false
-            lumeDetectItem.title = "Detected"
-            lumeDetectItem.isEnabled = false
+            if runtimeActivity["Lume"] == true {
+                lumeDetectItem.title = "Working..."
+                lumeDetectItem.isEnabled = false
+            } else {
+                lumeDetectItem.title = lumeState == .running ? "Disable Daemon" : "Enable Daemon"
+                lumeDetectItem.isEnabled = true
+                lumeDetectItem.target = self
+                lumeDetectItem.action = #selector(runtimeToggled(_:))
+                lumeDetectItem.representedObject = "Lume"
+            }
+            lumeDetectItem.indentationLevel = 1
             place(lumeDetectItem, present: true)
         } else {
             place(lumeDetectItem, present: false)
@@ -346,6 +393,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 text += vmCount == 1 ? " - 1 VM" : " - \(vmCount) VMs"
             }
             vmnetRowItem.title = text
+            vmnetRowItem.indentationLevel = 1
             vmnetRowItem.isEnabled = false
             if vmnetBusy {
                 vmnetActionItem.title = "Working..."
@@ -360,6 +408,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
 
         place(tailSep, present: true)
+        if let detail, !detail.isEmpty {
+            errorItem.title = detail
+            place(errorItem, present: true)
+        } else {
+            place(errorItem, present: false)
+        }
+        place(loginItem, present: true)
 
         let versionSuffix = cliVersion.map { " \($0)" } ?? ""
         switch state {
@@ -378,7 +433,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
 
         appleRowItem.title = "Apple Container\(versionSuffix)"
-        aboutItem.title = "About."
 
         statusLineItem.title = activity != .none
             ? (state == .running ? "Status: Running" : "Status: Not Running")
@@ -527,6 +581,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         loginStatusCache = Self.loginStatus
+        // Itens de view acompanham a largura do menu aberto.
+        let width = max(200, menu.size.width - 18)
+        headerView.frame.size.width = width
+        footerView.frame.size.width = width
         refreshNow()
         if activity == .none { apply() }
     }
@@ -618,9 +676,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // MARK: Varedura ativa (⟳ do cabecalho)
 
-    @objc private func headerClicked(_ sender: NSMenuItem) {
+    @objc private func headerClicked(_ sender: Any) {
+        menu.cancelTracking()
         cli.rescan()
         refreshNow()
+    }
+
+    @objc private func quitClicked(_ sender: Any) {
+        menu.cancelTracking()
+        NSApplication.shared.terminate(nil)
     }
 
     // MARK: Rede virtual (vmnet) - somente subir, nunca derrubar
@@ -709,10 +773,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             return false
         }
 
-        // Estrutura inicial: cabecalho + login fixos, sem blocos (nada
-        // detectado com runtimes: [] e Fusion ausente), sem erro.
-        expect(controller.headerItem.menu != nil && controller.loginItem.menu != nil,
-               "cabecalho e login fixos no menu")
+        // Estrutura inicial: cabecalho com ⟳ e rodape About/Quit fixos, sem
+        // blocos (nada detectado com runtimes: [] e Fusion ausente), sem erro.
+        expect(controller.headerViewItem.menu != nil && controller.footerItem.menu != nil
+               && controller.loginItem.menu != nil,
+               "cabecalho, rodape e login fixos no menu")
         expect(controller.appleRowItem.menu != nil && controller.dockerRowItem.menu != nil,
                "blocos Apple e Docker sempre presentes")
         expect(controller.podmanRowItem.menu == nil && controller.lumeRowItem.menu == nil,
@@ -722,10 +787,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(!hasConsecutiveSeparators(menu), "sem separadores consecutivos")
         expect(controller.errorItem.menu == nil, "menu inicia sem linha de erro")
 
-        // Header: titulo com versao do app e acao de varedura.
-        expect(controller.headerItem.title.contains("Container Status")
-               && controller.headerItem.title.contains("⟳"),
-               "cabecalho mostra nome, versao e ⟳")
+        // Header: view com titulo e botao de varedura no canto direito.
+        expect(controller.headerViewItem.view != nil
+               && controller.headerView.subviews.first?.subviews.contains(where: {
+                   $0 is NSButton
+               }) == true,
+               "cabecalho tem botao de varedura ao lado do titulo")
+        expect(controller.footerItem.view != nil,
+               "rodape About/Quit em item de view")
 
         // Bloco Apple: estado, linhas de container com memoria, acao.
         let listTwo = [ContainerCLI.ContainerSummary(id: "web", memoryBytes: 2_147_483_648),
@@ -737,10 +806,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let rows = controller.containerRowItems
         expect(rows.count == 2 && rows[0].title == "web - 2048 MB" && rows[1].title == "db",
                "linhas de container mostram id e memoria")
-        expect(controller.actionItem.title == "Disable Daemon" && controller.actionItem.isEnabled,
-               "acao do daemon em ingles e habilitada")
-        expect(controller.githubItem.menu != nil && controller.githubItem.title == "GitHub",
-               "GitHub presente no bloco Apple")
+        expect(controller.actionItem.title == "Disable Daemon" && controller.actionItem.isEnabled
+               && controller.actionItem.indentationLevel == 1,
+               "acao do daemon em ingles, habilitada e indentada")
+        expect(controller.githubItem.menu != nil && controller.githubItem.title == "GitHub"
+               && controller.githubItem.indentationLevel == 1,
+               "GitHub presente e indentado no bloco Apple")
 
         // Ciclo de vida da linha de erro: entra, atualiza, sai.
         controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Start failed"),
@@ -772,11 +843,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "docker mostra estado e Detected")
         expect(controller.subStatusItems["OrbStack"]?.menu != nil,
                "OrbStack detectado entra como sub-item")
-        expect(controller.subStatusItems["OrbStack"]?.indentationLevel == 1,
-               "sub-item indentado no bloco Docker")
-        expect(controller.subActionItems["OrbStack"]?.title == "Disable Daemon"
+        expect(controller.subStatusItems["OrbStack"]?.indentationLevel == 2,
+               "sub-item indentado dois niveis no bloco Docker")
+        expect(controller.subActionItems["OrbStack"]?.title == "Stop OrbStack"
                && controller.subActionItems["OrbStack"]?.isEnabled == true,
-               "OrbStack com toggle proprio")
+               "OrbStack rodando oferece Stop (nao Disable Daemon)")
         expect(controller.subStatusItems["Colima"]?.menu == nil
                && controller.subStatusItems["Docker Desktop"]?.menu == nil,
                "providers nao detectados ficam fora do menu")
@@ -830,6 +901,20 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             state: .running, vmCount: 1)
         expect(toggleController.errorItem.menu == nil,
                "cancelar vmnet sai sem linha de erro")
+
+        // Lume com toggle brew: detected-only quando brew ausente.
+        let lumeController = StatusItemController(
+            cli: ContainerCLI(directories: []), runtimes: [],
+            vmnet: VmnetProbe(fusionAppPath: "/no/such/Fusion.app"))
+        lumeController.item.isVisible = false
+        defer { NSStatusBar.system.removeStatusItem(lumeController.item) }
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .notInstalled], sequence: 1)
+        expect(lumeController.lumeRowItem.menu == nil,
+               "lume fora do menu sem deteccao")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 2)
+        expect(lumeController.lumeRowItem.menu != nil
+               && lumeController.lumeDetectItem.title == "Enable Daemon",
+               "lume detectado oferece habilitar o daemon")
 
         // Ordem: epoca e sequencia seguem descartando leituras velhas.
         let epochBefore = toggleController.mutationEpoch

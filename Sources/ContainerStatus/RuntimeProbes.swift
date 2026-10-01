@@ -44,12 +44,17 @@ struct RuntimeProbeConfig: Sendable {
     let detectAppPath: String?
     /// Natureza do servico, para o tooltip ("launchd service", "app + VM").
     let nature: String
+    /// Provider baseado em app: a acao real e Start/Stop do app, nao
+    /// Enable/Disable Daemon (que enganaria quando o daemon nao existe
+    /// separadamente).
+    let appBased: Bool
 
     init(label: String, binaryName: String, statusArguments: [String],
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
          control: RuntimeControl? = nil, info: RuntimeInfo? = nil,
          autoStartPatterns: [String] = [], countArguments: [String]? = nil,
-         pollEvery: Int = 1, detectAppPath: String? = nil, nature: String = "") {
+         pollEvery: Int = 1, detectAppPath: String? = nil, nature: String = "",
+         appBased: Bool = false) {
         self.label = label
         self.binaryName = binaryName
         self.statusArguments = statusArguments
@@ -61,6 +66,7 @@ struct RuntimeProbeConfig: Sendable {
         self.pollEvery = max(1, pollEvery)
         self.detectAppPath = detectAppPath
         self.nature = nature
+        self.appBased = appBased
     }
 
     /// Consulta informativa de planta: comando + rotulo do que ele responde.
@@ -147,9 +153,14 @@ extension RuntimeProbeConfig {
     static let lume = RuntimeProbeConfig(
         label: "Lume", binaryName: "lume", statusArguments: ["ls", "--format", "json"],
         interpret: { $0.spawned && $0.stdout.contains("\"running\"") ? .running : .stopped },
+        control: RuntimeControl(
+            startBinary: "brew", startArguments: ["services", "start", "homebrew.mxcl.lume"],
+            startTimeout: 60,
+            stopBinary: "brew", stopArguments: ["services", "stop", "homebrew.mxcl.lume"],
+            stopTimeout: 60),
         autoStartPatterns: ["homebrew.mxcl.lume"],
         pollEvery: 5,
-        nature: "LaunchAgent homebrew.mxcl.lume"
+        nature: "LaunchAgent homebrew.mxcl.lume (brew services)"
     )
 
     /// Docker Desktop: presenca pelo app; status pelo processo; toggle dele
@@ -164,7 +175,8 @@ extension RuntimeProbeConfig {
             stopBinary: "/usr/bin/osascript",
             stopArguments: ["-e", "quit app \"Docker\""], stopTimeout: 60),
         detectAppPath: "/Applications/Docker.app",
-        nature: "app Docker Desktop + daemon proprio"
+        nature: "app Docker Desktop + daemon proprio",
+        appBased: true
     )
 
     /// Rancher Desktop (SUSE): app + VM com daemon docker proprio.
@@ -178,7 +190,8 @@ extension RuntimeProbeConfig {
             stopBinary: "/usr/bin/osascript",
             stopArguments: ["-e", "quit app \"Rancher Desktop\""], stopTimeout: 60),
         detectAppPath: "/Applications/Rancher Desktop.app",
-        nature: "app Rancher Desktop + VM (backbone docker)"
+        nature: "app Rancher Desktop + VM (backbone docker)",
+        appBased: true
     )
 
     /// Finch (AWS, base Lima): CLI rara; exibido como detectado, sem toggle
@@ -198,7 +211,8 @@ extension RuntimeProbeConfig {
             startBinary: "/usr/bin/open", startArguments: ["-a", "OrbStack"],
             startTimeout: 30,
             stopBinary: "orbctl", stopArguments: ["stop"], stopTimeout: 120),
-        nature: "app OrbStack + VM (backbone docker)"
+        nature: "app OrbStack + VM (backbone docker)",
+        appBased: true
     )
 }
 
