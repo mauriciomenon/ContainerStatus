@@ -246,20 +246,20 @@ enum SelfTest {
         // Docker: exit 0 = daemon responde; erro = CLI sem daemon.
         let dockerDirectory = temporary.appendingPathComponent("docker", isDirectory: true)
         try FileManager.default.createDirectory(at: dockerDirectory, withIntermediateDirectories: false)
-        try bare("docker", dockerDirectory, exitCode: 0)
+        _ = try bare("docker", dockerDirectory, exitCode: 0)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
             .currentStatus().state == .running, "docker com daemon = ligado")
-        try bare("docker", dockerDirectory, exitCode: 1)
+        _ = try bare("docker", dockerDirectory, exitCode: 1)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
             .currentStatus().state == .stopped, "docker sem daemon = desligado")
 
         // Informacao de planta (passo 3 parcial): contexto do docker via
         // sonda read-only; falha de comando = nil.
-        try stub("docker", dockerDirectory, stdout: "orbstack", exitCode: 0)
+        _ = try stub("docker", dockerDirectory, stdout: "orbstack", exitCode: 0)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
             .currentInfo() == "contexto: orbstack",
                "sonda informativa le o contexto do docker")
-        try bare("docker", dockerDirectory, exitCode: 1)
+        _ = try bare("docker", dockerDirectory, exitCode: 1)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
             .currentInfo() == nil,
                "sonda informativa falha sem exit 0")
@@ -267,22 +267,22 @@ enum SelfTest {
         // Podman: JSON de machine list com maquina Running.
         let podmanDirectory = temporary.appendingPathComponent("podman", isDirectory: true)
         try FileManager.default.createDirectory(at: podmanDirectory, withIntermediateDirectories: false)
-        try stub("podman", podmanDirectory,
+        _ = try stub("podman", podmanDirectory,
                  stdout: "[{\"Name\":\"pm\",\"State\":\"Running\"}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .running, "podman com maquina running = ligado")
-        try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
+        _ = try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped, "podman sem maquina = desligado")
 
         // Lume: JSON de ls com VM running (exit 0 mesmo sem VMs).
         let lumeDirectory = temporary.appendingPathComponent("lume", isDirectory: true)
         try FileManager.default.createDirectory(at: lumeDirectory, withIntermediateDirectories: false)
-        try stub("lume", lumeDirectory,
+        _ = try stub("lume", lumeDirectory,
                  stdout: "[{\"name\":\"macos\",\"status\":\"running\"}]", exitCode: 0)
         expect(RuntimeProbe(config: .lume, directories: [lumeDirectory.path])
             .currentStatus().state == .running, "lume com VM running = ligado")
-        try stub("lume", lumeDirectory, stdout: "[\n\n]", exitCode: 0)
+        _ = try stub("lume", lumeDirectory, stdout: "[\n\n]", exitCode: 0)
         expect(RuntimeProbe(config: .lume, directories: [lumeDirectory.path])
             .currentStatus().state == .stopped, "lume sem VMs = desligado")
 
@@ -304,13 +304,13 @@ enum SelfTest {
         // Contagem por runtime (ps -q = uma linha por container): docker com
         // receita de contagem; colima sem receita nunca conta.
         let dockerCountProbe = RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
-        try stub("docker", dockerDirectory, stdout: "id1\nid2\nid3", exitCode: 0)
+        _ = try stub("docker", dockerDirectory, stdout: "id1\nid2\nid3", exitCode: 0)
         expect(dockerCountProbe.runningCount() == 3,
                "docker ps -q com tres ids = 3 containers")
-        try stub("docker", dockerDirectory, stdout: "", exitCode: 0)
+        _ = try stub("docker", dockerDirectory, stdout: "", exitCode: 0)
         expect(dockerCountProbe.runningCount() == 0,
                "docker ps -q vazio = 0 containers")
-        try bare("docker", dockerDirectory, exitCode: 1)
+        _ = try bare("docker", dockerDirectory, exitCode: 1)
         expect(dockerCountProbe.runningCount() == nil,
                "docker ps falho = nil")
         let noCountProbe = RuntimeProbe(config: .colima, directories: [lumeDirectory.path])
@@ -320,10 +320,10 @@ enum SelfTest {
         // OrbStack: orbctl status "Running" exit 0; erro = parado.
         let orbstackDirectory = temporary.appendingPathComponent("orbstack", isDirectory: true)
         try FileManager.default.createDirectory(at: orbstackDirectory, withIntermediateDirectories: false)
-        try stub("orbctl", orbstackDirectory, stdout: "Running", exitCode: 0)
+        _ = try stub("orbctl", orbstackDirectory, stdout: "Running", exitCode: 0)
         expect(RuntimeProbe(config: .orbstack, directories: [orbstackDirectory.path])
             .currentStatus().state == .running, "orbstack running = ligado")
-        try bare("orbctl", orbstackDirectory, exitCode: 1)
+        _ = try bare("orbctl", orbstackDirectory, exitCode: 1)
         expect(RuntimeProbe(config: .orbstack, directories: [orbstackDirectory.path])
             .currentStatus().state == .stopped, "orbstack parado = desligado")
     }

@@ -297,18 +297,26 @@ final class ContainerCLI: Sendable {
 
         // Os pipes sao lidos em paralelo a execucao: ler so depois da saida
         // travaria o filho se a saida exceder o buffer do pipe (64KB).
-        var stdoutData = Data()
-        var stderrData = Data()
+        // As Data morrem num box sob lock: o bloqueio de saida fica no
+        // thread de leitura e o compilador enxerga o acesso protegido.
+        final class IOBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var storage = Data()
+            func set(_ data: Data) { lock.withLock { storage = data } }
+            func get() -> Data { lock.withLock { storage } }
+        }
+        let stdoutBox = IOBox()
+        let stderrBox = IOBox()
         let ioQueue = DispatchQueue(label: "local.containerstatus.io", qos: .utility)
         let ioGroup = DispatchGroup()
         ioGroup.enter()
         ioQueue.async {
-            stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            stdoutBox.set(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
             ioGroup.leave()
         }
         ioGroup.enter()
         ioQueue.async {
-            stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            stderrBox.set(stderrPipe.fileHandleForReading.readDataToEndOfFile())
             ioGroup.leave()
         }
 
@@ -322,8 +330,8 @@ final class ContainerCLI: Sendable {
             }
         }
         // Teto para o caso de um processo neto segurar o pipe aberto. Se
-        // expirar, as Data ainda pertencem a ioQueue: nao le-las evita corrida
-        // e devolve saida vazia de proposito.
+        // expirar, o box ainda pode receber escrita do ioQueue: nao ler as
+        // Data evita esperar no lock e devolve saida vazia de proposito.
         let ioCompleted = ioGroup.wait(timeout: .now() + 2) == .success
 
         if timedOut {
@@ -334,8 +342,8 @@ final class ContainerCLI: Sendable {
             return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
                                 stderr: "saida nao disponivel: pipe mantido aberto por processo filho")
         }
-        let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
-        let stdoutText = String(data: stdoutData, encoding: .utf8) ?? ""
+        let stderrText = String(data: stderrBox.get(), encoding: .utf8) ?? ""
+        let stdoutText = String(data: stdoutBox.get(), encoding: .utf8) ?? ""
         return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
                             stderr: stderrText.trimmingCharacters(in: .whitespacesAndNewlines),
                             stdout: stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
