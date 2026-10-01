@@ -385,16 +385,23 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         Task.detached(priority: .userInitiated) {
             let result = turningOff ? cli.stop() : cli.start()
             let poll = cli.checkStatus()
+            // Contagem fresca junto: sem isso o status mostraria a carga do
+            // poll anterior por ate 3s apos o toggle.
+            let count = cli.containerCount()
             await MainActor.run { [weak self] in
-                self?.finish(result: result, poll: poll)
+                self?.finish(result: result, poll: poll, count: count)
             }
         }
     }
 
-    private func finish(result: CLIRunResult, poll: (state: ServiceState, detail: String?)) {
+    private func finish(result: CLIRunResult, poll: (state: ServiceState, detail: String?),
+                        count: Int? = nil) {
         mutationEpoch += 1
         activity = .none
         state = poll.state
+        if let count {
+            self.containerCount = count
+        }
         if result.succeeded {
             detail = poll.detail
             detailIsLocal = false
@@ -475,6 +482,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.errorItem.menu == nil, "menu inicia sem linha de erro")
         expect(controller.menu.index(of: controller.runtimeItems["Colima"] ?? NSMenuItem()) == -1,
                "menu inicia sem linha de colima")
+
+        // Sufixo de carga no Status: contagem fresca do toggle, singular e
+        // plural; finish sem contagem mantem a ultima.
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
+                          poll: (.running, nil), count: 2)
+        expect(controller.statusLineItem.title == "Status: Ligado (2 containers)",
+               "status ligado mostra a contagem de containers")
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
+                          poll: (.running, nil), count: 1)
+        expect(controller.statusLineItem.title == "Status: Ligado (1 container)",
+               "um container aparece no singular")
+        controller.finish(result: CLIRunResult(exitCode: 0, spawned: true),
+                          poll: (.running, nil))
+        expect(controller.statusLineItem.title == "Status: Ligado (1 container)",
+               "finish sem contagem mantem a ultima conhecida")
 
         controller.finish(result: CLIRunResult(exitCode: 1, spawned: true,
                                               stderr: "Falha ao iniciar\nDetalhe adicional"),
