@@ -87,14 +87,8 @@ verify_binary_arches "$BUILD_DIR/$APP_NAME" "${ARCH_LIST[@]}"
 
 APP="$ROOT/${APP_NAME}.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
-
-# Convert Icon.icon to Icon.icns if present (requires iconutil).
-ICON_SOURCE="$ROOT/Icon.icon"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ICON_TARGET="$ROOT/Icon.icns"
-if [[ -f "$ICON_SOURCE" ]]; then
-  iconutil --convert icns --output "$ICON_TARGET" "$ICON_SOURCE"
-fi
 
 LSUI_VALUE="false"
 if [[ "$MENU_BAR_APP" == "1" ]]; then
@@ -129,29 +123,6 @@ PLIST
 cp "$BUILD_DIR/$APP_NAME" "$APP/Contents/MacOS/$APP_NAME"
 chmod +x "$APP/Contents/MacOS/$APP_NAME"
 
-# Bundle app resources (if any).
-APP_RESOURCES_DIR="$ROOT/Sources/$APP_NAME/Resources"
-if [[ -d "$APP_RESOURCES_DIR" ]]; then
-  cp -R "$APP_RESOURCES_DIR/." "$APP/Contents/Resources/"
-fi
-
-# SwiftPM resource bundles are emitted next to the built binary.
-shopt -s nullglob
-SWIFTPM_BUNDLES=("${BUILD_DIR}/"*.bundle)
-shopt -u nullglob
-if [[ ${#SWIFTPM_BUNDLES[@]} -gt 0 ]]; then
-  for bundle in "${SWIFTPM_BUNDLES[@]}"; do
-    cp -R "$bundle" "$APP/Contents/Resources/"
-  done
-fi
-
-# Embed frameworks if any exist in the build folder.
-if compgen -G "${BUILD_DIR}/*.framework" >/dev/null; then
-  cp -R "${BUILD_DIR}/"*.framework "$APP/Contents/Frameworks/"
-  chmod -R a+rX "$APP/Contents/Frameworks"
-  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/$APP_NAME"
-fi
-
 if [[ -f "$ICON_TARGET" ]]; then
   cp "$ICON_TARGET" "$APP/Contents/Resources/Icon.icns"
 fi
@@ -163,46 +134,14 @@ chmod -R u+w "$APP"
 xattr -cr "$APP"
 find "$APP" -name '._*' -delete
 
-ENTITLEMENTS_DIR="$ROOT/.build/entitlements"
-DEFAULT_ENTITLEMENTS="$ENTITLEMENTS_DIR/${APP_NAME}.entitlements"
-mkdir -p "$ENTITLEMENTS_DIR"
-
-APP_ENTITLEMENTS=${APP_ENTITLEMENTS:-$DEFAULT_ENTITLEMENTS}
-if [[ ! -f "$APP_ENTITLEMENTS" ]]; then
-  cat > "$APP_ENTITLEMENTS" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <!-- Add entitlements here if needed. -->
-</dict>
-</plist>
-PLIST
-fi
-
+# Sem entitlements: o app nao precisa de nenhum (README, politica de
+# privilegios). Identidade real liga hardened runtime e timestamp.
 if [[ "$SIGNING_MODE" == "adhoc" || -z "$APP_IDENTITY" ]]; then
   CODESIGN_ARGS=(--force --sign "-")
 else
   CODESIGN_ARGS=(--force --timestamp --options runtime --sign "$APP_IDENTITY")
 fi
 
-# Sign embedded frameworks and their nested binaries before the app bundle.
-sign_frameworks() {
-  local fw
-  for fw in "$APP/Contents/Frameworks/"*.framework; do
-    if [[ ! -d "$fw" ]]; then
-      continue
-    fi
-    while IFS= read -r -d '' bin; do
-      codesign "${CODESIGN_ARGS[@]}" "$bin"
-    done < <(find "$fw" -type f -perm -111 -print0)
-    codesign "${CODESIGN_ARGS[@]}" "$fw"
-  done
-}
-sign_frameworks
-
-codesign "${CODESIGN_ARGS[@]}" \
-  --entitlements "$APP_ENTITLEMENTS" \
-  "$APP"
+codesign "${CODESIGN_ARGS[@]}" "$APP"
 
 echo "Created $APP"

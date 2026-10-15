@@ -281,13 +281,6 @@ final class ContainerCLI: Sendable {
         return run(["system", "stop"], timeout: Self.stopTimeout)
     }
 
-    /// Contagem de containers rodando (`container ls --format json` lista os
-    /// ativos por padrao). nil quando a CLI nao responde - quem exibe mantem
-    /// a ultima contagem conhecida. Read-only, watchdog do status.
-    func containerCount() -> Int? {
-        runningContainers()?.count
-    }
-
     /// Containers rodando com uso de memoria (do mesmo `ls --format json`).
     /// nil quando a CLI nao responde; lista vazia = servico de pe sem carga.
     struct ContainerSummary: Equatable, Sendable {

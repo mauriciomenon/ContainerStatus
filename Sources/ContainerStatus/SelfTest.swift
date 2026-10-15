@@ -292,8 +292,7 @@ enum SelfTest {
             #!/bin/sh
             case "$1" in
               --version) printf 'container CLI version 1.6.0\\n' ;;
-              system) [ "$2" = version ] && printf 'COMPONENT VERSION\\ncontainer-apiserver \(apiserver) release x\\n'
-                      printf 'v\\n' >> "$0.versions" ;;
+              system) [ "$2" = version ] && printf 'COMPONENT VERSION\\ncontainer-apiserver \(apiserver) release x\\n' ;;
             esac
             exit 0
             """
@@ -329,7 +328,7 @@ enum SelfTest {
         }
         let countingCLI = ContainerCLI(directories: [countDirectory.path])
         try writeContainerStub("[{\"id\":\"a\",\"configuration\":{\"resources\":{\"memoryInBytes\":2147483648}}},{\"id\":\"b\"}]", exitCode: 0)
-        expect(countingCLI.containerCount() == 2, "ls com dois containers = 2")
+        expect(countingCLI.runningContainers()?.count == 2, "ls com dois containers = 2")
         let summary = countingCLI.runningContainers() ?? []
         expect(summary.count == 2 && summary[0].id == "a"
                && summary[0].memoryBytes == 2_147_483_648
@@ -341,9 +340,9 @@ enum SelfTest {
         expect(ContainerCLI.menuSafe(String(repeating: "a", count: 100)).count == 64,
                "id enorme e truncado")
         try writeContainerStub("[]", exitCode: 0)
-        expect(countingCLI.containerCount() == 0, "ls vazio = 0")
+        expect(countingCLI.runningContainers()?.count == 0, "ls vazio = 0")
         try writeContainerStub("erro", exitCode: 1)
-        expect(countingCLI.containerCount() == nil, "ls falho = nil")
+        expect(countingCLI.runningContainers()?.count == nil, "ls falho = nil")
 
         try checkColima(in: temporary, expect: expect)
         try checkRuntimeRecipes(in: temporary, expect: expect)

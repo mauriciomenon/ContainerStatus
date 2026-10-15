@@ -8,7 +8,6 @@ import ServiceManagement
 @MainActor
 final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let projectURL = URL(string: "https://github.com/apple/container")!
-    private static let projectLinkText = "github.com/apple/container"
     private static let repoURL = URL(string: "https://github.com/mauriciomenon/ContainerStatus")!
 
     private let cli: ContainerCLI
@@ -55,14 +54,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// App version shown next to the "Sobre ContainerStatus" item.
     private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     private var pollTimer: DispatchSourceTimer?
-    /// Checkmark do login vem daqui; SMAppService faz round-trip XPC, entao
-    /// o cache e renovado so ao abrir o menu e no proprio toggle.
-    /// Cache do status do login item (marcado, desmarcado ou pendente de
-    /// aprovacao); renovado ao abrir o menu e no proprio toggle.
+    /// Cache do status do login item: SMAppService faz round-trip XPC, entao
+    /// e renovado so ao abrir o menu e no proprio toggle.
     private var loginStatusCache: SMAppService.Status = .notRegistered
 
     // Menu items, kept as references so state changes mutate them in place.
-    private let headerItem = NSMenuItem()
     private let loginItem = NSMenuItem()
     // Bloco Apple Container
     private let appleRowItem = NSMenuItem()
@@ -646,12 +642,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Actions
 
     @objc private func actionClicked(_ sender: NSMenuItem) {
-        // In the not-installed state the action row is a link to the project.
-        if state == .notInstalled {
-            openProjectPage()
-            return
-        }
-        guard activity == .none else { return }
+        guard activity == .none, state != .notInstalled else { return }
         let turningOff = (state == .running)
         activity = turningOff ? .stopping : .starting
         detail = nil
@@ -1085,8 +1076,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Launch at login
 
     private static var loginStatus: SMAppService.Status {
-        guard #available(macOS 13.0, *) else { return .notRegistered }
-        return SMAppService.mainApp.status
+        SMAppService.mainApp.status
     }
 
     @objc private func toggleLogin(_ sender: NSMenuItem) {
@@ -1178,11 +1168,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         append("GPL 2.0", font: small, color: .secondaryLabelColor)
         return text
-    }
-
-    @objc private func openProjectPage() {
-        menu.cancelTracking()
-        NSWorkspace.shared.open(Self.projectURL)
     }
 
     // MARK: Icon

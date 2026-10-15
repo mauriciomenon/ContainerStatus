@@ -6,7 +6,7 @@ enum ServiceState: Equatable, Sendable {
     case running
     /// Service is off; red dot.
     case stopped
-    /// The CLI exists but could not be executed or answered in time; gray hollow dot.
+    /// No CLI found, or it did not answer `system status` in time; gray hollow dot.
     case notInstalled
 
     /// Maps a `container system status` outcome to a state.
