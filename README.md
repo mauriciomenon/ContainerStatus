@@ -90,9 +90,13 @@ ordem, sem repetir diretorios:
 
 1. `/usr/local/bin` - instalador .pkg oficial e `make install` padrao
 2. `/opt/homebrew/bin` e `/opt/homebrew/sbin` - Homebrew (Apple Silicon)
-3. `/usr/local/sbin`, `~/.local/bin`, `/opt/sbin`, `/usr/bin`, `/bin`
-4. todos os diretorios do `PATH` do ambiente de lancamento (builds de
-   codigo-fonte com prefixo customizado entram aqui)
+3. `/usr/local/sbin`, `/opt/sbin`, `/usr/bin`, `/bin`
+4. somente se nenhum dos anteriores tiver a CLI: `~/.local/bin` e os
+   diretorios absolutos do `PATH` do ambiente de lancamento (builds de
+   codigo-fonte com prefixo customizado entram aqui). Um binario plantado
+   num prefixo do usuario nao concorre com a instalacao do sistema.
+
+Binario gravavel por grupo ou outros usuarios e ignorado.
 
 Cobertura por metodo de instalacao: **.pkg do site** (instala em
 `/usr/local/bin`), **brew** (`/opt/homebrew/bin` no Apple Silicon,

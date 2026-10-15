@@ -156,7 +156,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // MARK: Lifecycle
 
-    init(cli: ContainerCLI = ContainerCLI(),
+    init(cli: ContainerCLI = ContainerCLI.installed(),
          runtimes: [RuntimeProbe] = RuntimeProbeConfig.standard.map { RuntimeProbe(config: $0) },
          vmnet: VmnetProbe = VmnetProbe()) {
         self.cli = cli

@@ -67,7 +67,9 @@ struct AppMain {
             done.signal()
         }
         done.wait()
-        let installed = ContainerCLI.resolveNewest()?.version
+        let cli = ContainerCLI.installed()
+        _ = cli.checkStatus()
+        let installed = cli.currentVersion()
         if let release = fetched.withLock({ $0 }) {
             let pending = UpstreamRelease.update(release, installed: installed) != nil
             print("apple/container no GitHub: \(release.version) (instalada: \(installed ?? "nenhuma"))"

@@ -20,36 +20,53 @@ final class ContainerCLI: Sendable {
     /// Cobre os 5s + 20s de espera da CLI e a comunicacao com o servico.
     private static let stopTimeout: TimeInterval = 40
 
-    /// Directories scanned for the CLI, in priority order: the official .pkg
-    /// install root, Homebrew on Apple Silicon and Intel, user-local prefixes
-    /// and system paths, then whatever PATH the launching environment had.
-    /// This is deliberately machine-independent: the app must work whether
-    /// the CLI arrived via .pkg, brew or a source build with a custom prefix.
-    static func searchDirectories() -> [String] {
-        var directories = [
-            "/usr/local/bin",                  // .pkg / `make install` default
-            "/opt/homebrew/bin",               // Homebrew, Apple Silicon
-            "/opt/homebrew/sbin",
-            "/usr/local/sbin",
-            NSHomeDirectory() + "/.local/bin", // pip/cargo-style user prefixes
-            "/opt/sbin",
-            "/usr/bin",
-            "/bin",
-        ]
+    /// Install roots of the official .pkg, Homebrew and the system, in
+    /// priority order. Machine-independent: .pkg, brew or `make install`.
+    static let systemDirectories = [
+        "/usr/local/bin",                  // .pkg / `make install` default
+        "/opt/homebrew/bin",               // Homebrew, Apple Silicon
+        "/opt/homebrew/sbin",
+        "/usr/local/sbin",
+        "/opt/sbin",
+        "/usr/bin",
+        "/bin",
+    ]
+
+    /// User-writable prefixes (`~/.local/bin`, inherited PATH): only consulted
+    /// when no system directory has the CLI. Mixing them in let a planted
+    /// binary claiming "version 99" win the newest-version race.
+    static func fallbackDirectories() -> [String] {
+        var directories = [NSHomeDirectory() + "/.local/bin"]
         let inherited = ProcessInfo.processInfo.environment["PATH"] ?? ""
-        for item in inherited.split(separator: ":", omittingEmptySubsequences: true) {
+        for item in inherited.split(separator: ":", omittingEmptySubsequences: true)
+        where item.hasPrefix("/") {
             directories.append(String(item))
         }
-        var seen = Set<String>()
+        var seen = Set(systemDirectories)
         return directories.filter { seen.insert($0).inserted }
     }
 
+    /// Search order for the other runtimes (first match wins).
+    static func searchDirectories() -> [String] {
+        systemDirectories + fallbackDirectories()
+    }
+
+    /// The production CLI: system directories, user prefixes as fallback.
+    static func installed() -> ContainerCLI {
+        ContainerCLI(fallbackDirectories: fallbackDirectories())
+    }
+
     /// Every executable `container` in the given directories, priority order
-    /// preserved.
-    static func existingCandidates(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> [String] {
+    /// preserved. A binary writable by group or others is skipped: anyone
+    /// with that access could swap what the app executes.
+    static func existingCandidates(inDirectories directories: [String] = ContainerCLI.systemDirectories) -> [String] {
         directories.compactMap { directory in
             let candidate = URL(fileURLWithPath: directory).appendingPathComponent("container").path
-            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+            var metadata = stat()
+            guard FileManager.default.isExecutableFile(atPath: candidate),
+                  stat(candidate, &metadata) == 0,
+                  metadata.st_mode & (S_IWGRP | S_IWOTH) == 0 else { return nil }
+            return candidate
         }
     }
 
@@ -136,7 +153,7 @@ final class ContainerCLI: Sendable {
         return destination == path ? path : "\(destination) via \(path)"
     }
 
-    static func resolveNewest(inDirectories directories: [String] = ContainerCLI.searchDirectories()) -> ResolvedCLI? {
+    static func resolveNewest(inDirectories directories: [String] = ContainerCLI.systemDirectories) -> ResolvedCLI? {
         resolveNewest(existingCandidates: existingCandidates(inDirectories: directories))
     }
 
@@ -162,17 +179,20 @@ final class ContainerCLI: Sendable {
     /// picked up without restarting the app.
     private let pathLock: OSAllocatedUnfairLock<ResolutionState>
     private let directories: [String]
+    private let fallbackDirectories: [String]
     private let environment: [String: String]
 
     private var resolvedBinaryPath: String? {
         pathLock.withLock { $0.resolved?.path }
     }
 
-    init(binaryPath: String? = nil, directories: [String] = ContainerCLI.searchDirectories()) {
+    init(binaryPath: String? = nil, directories: [String] = ContainerCLI.systemDirectories,
+         fallbackDirectories: [String] = []) {
         self.pathLock = OSAllocatedUnfairLock(initialState: ResolutionState(resolved: binaryPath.map {
             ResolvedCLI(path: $0, version: nil, pathInfo: Self.makePathInfo($0))
         }))
         self.directories = directories
+        self.fallbackDirectories = fallbackDirectories
         self.environment = [
             "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": NSHomeDirectory(),
@@ -275,7 +295,9 @@ final class ContainerCLI: Sendable {
     }
 
     private func candidateSignatures() -> [CandidateSignature] {
-        Self.existingCandidates(inDirectories: directories).compactMap { path in
+        let primary = Self.existingCandidates(inDirectories: directories)
+        let candidates = primary.isEmpty ? Self.existingCandidates(inDirectories: fallbackDirectories) : primary
+        return candidates.compactMap { path in
             let destination = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
             var metadata = stat()
             guard stat(destination, &metadata) == 0 else {

@@ -233,6 +233,31 @@ enum SelfTest {
         expect(try probeCount(for: flakyOld) == 2,
                "com todos os probes ok o cache volta a valer")
 
+        // Binario plantado em prefixo do usuario: so vale sem CLI do sistema,
+        // e versao declarada maior nao rouba a selecao.
+        let plantedDirectory = temporary.appendingPathComponent("planted", isDirectory: true)
+        try FileManager.default.createDirectory(at: plantedDirectory, withIntermediateDirectories: false)
+        try writeCLI(at: plantedDirectory.appendingPathComponent("container"), version: "99.0.0")
+        let guarded = ContainerCLI(directories: [newDirectory.path],
+                                   fallbackDirectories: [plantedDirectory.path])
+        _ = guarded.checkStatus()
+        expect(guarded.currentBinaryPath() == newCLI.path,
+               "CLI do sistema vence binario de prefixo do usuario com versao maior")
+        let onlyFallback = ContainerCLI(directories: ["/no/such/dir"],
+                                        fallbackDirectories: [plantedDirectory.path])
+        _ = onlyFallback.checkStatus()
+        expect(onlyFallback.currentVersion() == "99.0.0",
+               "sem CLI do sistema o prefixo do usuario ainda e encontrado")
+        let writableDirectory = temporary.appendingPathComponent("writable", isDirectory: true)
+        try FileManager.default.createDirectory(at: writableDirectory, withIntermediateDirectories: false)
+        let writable = writableDirectory.appendingPathComponent("container")
+        try writeCLI(at: writable, version: "1.0.0")
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: writable.path)
+        expect(ContainerCLI.existingCandidates(inDirectories: [writableDirectory.path]).isEmpty,
+               "binario gravavel por outros usuarios e ignorado")
+        expect(!ContainerCLI.fallbackDirectories().contains("/usr/local/bin"),
+               "fallback nao repete diretorios do sistema")
+
         try FileManager.default.removeItem(at: oldCLI)
         _ = cli.checkStatus()
         expect(cli.currentBinaryPath() == newCLI.path, "remocao seleciona candidato restante")
