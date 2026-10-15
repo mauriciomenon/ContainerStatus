@@ -335,6 +335,11 @@ enum SelfTest {
                && summary[0].memoryBytes == 2_147_483_648
                && summary[1].id == "b" && summary[1].memoryBytes == nil,
                "ls parseia id e memoria por container")
+        try writeContainerStub("[{\"id\":\"web\\nStatus: Running\\tx\"}]", exitCode: 0)
+        expect(countingCLI.runningContainers()?.first?.id == "web Status: Running x",
+               "id com quebra de linha nao forja linhas no menu")
+        expect(ContainerCLI.menuSafe(String(repeating: "a", count: 100)).count == 64,
+               "id enorme e truncado")
         try writeContainerStub("[]", exitCode: 0)
         expect(countingCLI.containerCount() == 0, "ls vazio = 0")
         try writeContainerStub("erro", exitCode: 1)

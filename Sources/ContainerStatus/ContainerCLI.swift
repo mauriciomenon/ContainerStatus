@@ -305,11 +305,20 @@ final class ContainerCLI: Sendable {
             return nil
         }
         return list.map { entry in
-            let id = entry["id"] as? String ?? "?"
+            let id = Self.menuSafe(entry["id"] as? String ?? "?")
             let memory = (entry["configuration"] as? [String: Any])?["resources"] as? [String: Any]
             return ContainerSummary(id: id,
-                                    memoryBytes: memory?["memoryInBytes"] as? Int64)
+                                    memoryBytes: (memory?["memoryInBytes"] as? NSNumber)?.int64Value)
         }
+    }
+
+    /// O id vira titulo de item de menu: quebra de linha forjaria linhas
+    /// falsas ("Status: ..."), e um id enorme alargaria o menu inteiro.
+    static func menuSafe(_ text: String, limit: Int = 64) -> String {
+        let flat = String(text.unicodeScalars.map {
+            CharacterSet.controlCharacters.contains($0) ? " " : Character($0)
+        })
+        return flat.count > limit ? String(flat.prefix(limit - 3)) + "..." : flat
     }
 
     // MARK: Process plumbing
