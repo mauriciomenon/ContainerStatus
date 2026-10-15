@@ -231,6 +231,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 action.representedObject = probe.label
             }
         }
+        podmanRowItem.isEnabled = false
+        podmanActionItem.target = self
+        podmanActionItem.action = #selector(runtimeToggled(_:))
+        podmanActionItem.representedObject = "Podman"
         vmnetRowItem.isEnabled = false
         vmnetActionItem.target = self
         vmnetActionItem.action = #selector(vmnetClicked(_:))
@@ -397,6 +401,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
             podmanActionItem.indentationLevel = 1
         }
+        place(podmanActionItem, present: podmanState != .notInstalled)
 
         // ---- Lume (bloco proprio, sem toggle) ----
         let lumeState = runtimeStates["Lume"] ?? .notInstalled
@@ -966,7 +971,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .notInstalled], sequence: 1)
         expect(lumeController.lumeRowItem.menu == nil,
                "lume fora do menu sem deteccao")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 2)
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .running], sequence: 2)
+        expect(lumeController.podmanActionItem.menu != nil
+               && lumeController.podmanActionItem.title == "Disable Daemon"
+               && lumeController.podmanActionItem.action == #selector(runtimeToggled(_:))
+               && lumeController.podmanActionItem.representedObject as? String == "Podman"
+               && lumeController.menu.index(of: lumeController.podmanActionItem)
+                  == lumeController.menu.index(of: lumeController.podmanRowItem) + 1,
+               "podman detectado mostra a acao logo abaixo da linha")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .notInstalled], sequence: 3)
+        expect(lumeController.podmanActionItem.menu == nil, "podman sumido leva a acao junto")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 4)
         expect(lumeController.lumeRowItem.menu != nil
                && lumeController.lumeDetectItem.title == "Enable Daemon",
                "lume detectado oferece habilitar o daemon")
