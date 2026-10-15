@@ -131,20 +131,27 @@ extension RuntimeProbeConfig {
         nature: "daemon docker (dono no contexto)"
     )
 
-    /// `podman machine list --format json` sai exit 0 mesmo sem VM; o estado
-    /// da maquina aparece como "Running" no JSON. Heuristica documentada:
-    /// sem parse completo, procuramos o valor do campo de estado. Start
-    /// inicializa a maquina padrao.
+    /// `podman machine list --format json` sai exit 0 mesmo sem VM; cada
+    /// maquina traz o booleano `"Running"`. Procurar o texto "Running" dava
+    /// ligado com qualquer maquina existente, ate parada. Start inicializa a
+    /// maquina padrao.
     static let podman = RuntimeProbeConfig(
         label: "Podman", binaryName: "podman",
         statusArguments: ["machine", "list", "--format", "json"],
-        interpret: { $0.spawned && $0.stdout.contains("\"Running\"") ? .running : .stopped },
+        interpret: { podmanState($0) },
         control: .selfBinary(binaryName: "podman",
                              startArguments: ["machine", "start"], startTimeout: 180,
                              stopArguments: ["machine", "stop"], stopTimeout: 120),
         countArguments: ["ps", "-q"],
         nature: "podman machine (VM)"
     )
+
+    static func podmanState(_ result: CLIRunResult) -> ExternalRuntimeState {
+        guard result.succeeded,
+              let machines = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [[String: Any]]
+        else { return .stopped }
+        return machines.contains { $0["Running"] as? Bool == true } ? .running : .stopped
+    }
 
     /// O toggle controla o servidor `lume serve` (servico brew), entao o
     /// estado e o do LaunchAgent no launchd, nao o das VMs: servidor de pe

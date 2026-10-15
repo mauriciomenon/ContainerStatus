@@ -403,13 +403,21 @@ enum SelfTest {
             .currentInfo() == nil,
                "sonda informativa falha sem exit 0")
 
-        // Podman: JSON de machine list com maquina Running.
+        // Podman: formato oficial de machine list (booleano "Running").
         let podmanDirectory = temporary.appendingPathComponent("podman", isDirectory: true)
         try FileManager.default.createDirectory(at: podmanDirectory, withIntermediateDirectories: false)
         _ = try stub("podman", podmanDirectory,
-                 stdout: "[{\"Name\":\"pm\",\"State\":\"Running\"}]", exitCode: 0)
+                 stdout: "[{\"Name\":\"pm\",\"Default\":true,\"Running\":true,\"Starting\":false}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .running, "podman com maquina running = ligado")
+        _ = try stub("podman", podmanDirectory,
+                 stdout: "[{\"Name\":\"pm\",\"Default\":true,\"Running\":false,\"Starting\":false}]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .stopped, "podman com maquina parada = desligado")
+        _ = try stub("podman", podmanDirectory,
+                 stdout: "[{\"Name\":\"Running\",\"Running\":false}]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .stopped, "maquina chamada Running nao engana o estado")
         _ = try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped, "podman sem maquina = desligado")
