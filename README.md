@@ -76,6 +76,7 @@ cada checagem enquanto nao for encontrado, sem restart):
 | `container system start --disable-kernel-install` | so se o start puro falhar com erro explicito | 40s |
 | `container system stop` | acao "Desligar daemon" | 40s |
 | `container --version` | descoberta ou alteracao de uma instalacao; repetido no poll seguinte se falhar | 5s |
+| `container system version` | servico de pe apos troca da CLI ou start/stop; repetido enquanto a versao do servico divergir da CLI | 2s |
 
 **Unica conexao de rede:** `GET https://api.github.com/repos/apple/container/releases/latest`
 no arranque, a cada 6h e no rescan do cabecalho, sem token e sem enviar

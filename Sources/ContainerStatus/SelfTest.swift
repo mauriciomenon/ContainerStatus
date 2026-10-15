@@ -275,6 +275,39 @@ enum SelfTest {
         expect(stopped.succeeded && Date().timeIntervalSince(started) >= 10,
                "parada simulada superior a 10s conclui sem watchdog")
 
+        // Versao do servico (apiserver) x CLI: tabela de system version.
+        let table = """
+        COMPONENT            VERSION  BUILD    COMMIT
+        container            1.6.0    release  aaa
+        container-apiserver  1.5.0    release  bbb
+        """
+        expect(ContainerCLI.parseServiceVersion(table) == "1.5.0", "parse da versao do apiserver")
+        expect(ContainerCLI.parseServiceVersion("COMPONENT  VERSION\ncontainer  1.5.0") == nil,
+               "servico parado = sem versao do apiserver")
+        let serviceDirectory = temporary.appendingPathComponent("service", isDirectory: true)
+        try FileManager.default.createDirectory(at: serviceDirectory, withIntermediateDirectories: false)
+        let serviceCLI = serviceDirectory.appendingPathComponent("container")
+        func writeServiceCLI(apiserver: String) throws {
+            let script = """
+            #!/bin/sh
+            case "$1" in
+              --version) printf 'container CLI version 1.6.0\\n' ;;
+              system) [ "$2" = version ] && printf 'COMPONENT VERSION\\ncontainer-apiserver \(apiserver) release x\\n'
+                      printf 'v\\n' >> "$0.versions" ;;
+            esac
+            exit 0
+            """
+            try script.write(to: serviceCLI, atomically: false, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: serviceCLI.path)
+        }
+        try writeServiceCLI(apiserver: "1.5.0")
+        let service = ContainerCLI(directories: [serviceDirectory.path])
+        _ = service.checkStatus()
+        service.refreshServiceVersion(running: true)
+        expect(service.currentServiceVersion() == "1.5.0", "servico antigo de pe apos upgrade da CLI")
+        service.refreshServiceVersion(running: false)
+        expect(service.currentServiceVersion() == nil, "servico parado limpa a versao")
+
         // Contagem de containers rodando (ls --format json): parse do array,
         // vazio = 0, falha = nil.
         let countDirectory = temporary.appendingPathComponent("count", isDirectory: true)

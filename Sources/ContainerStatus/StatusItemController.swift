@@ -46,6 +46,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var vmCount = 0
     private var vmnetBusy = false
     private var cliVersion: String?
+    /// Versao do apiserver de pe; diferente da CLI = upgrade sem restart.
+    private var serviceVersion: String?
     /// Ultima release do apple/container vista no GitHub (nil ate a 1a consulta).
     private var upstream: UpstreamRelease?
     private var upstreamTask: Task<Void, Never>?
@@ -482,7 +484,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             break
         }
 
+        // Servico de pe com versao antiga: o upgrade so vale apos restart.
+        var staleService: String?
+        if state == .running, let serviceVersion, let cliVersion, serviceVersion != cliVersion {
+            staleService = serviceVersion
+        }
         appleRowItem.title = "Apple Container\(versionSuffix)"
+            + (staleService.map { " (running \($0), restart to update)" } ?? "")
 
         statusLineItem.title = activity != .none
             ? (state == .running ? "Status: Running" : "Status: Not Running")
@@ -550,6 +558,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let epoch = mutationEpoch
         pollQueue.async { [cli, runtimes, vmnet, weak self] in
             let result = cli.checkStatus()
+            cli.refreshServiceVersion(running: result.state == .running)
             // Uma chamada so alimenta contagem e lista do menu.
             let containers = cli.runningContainers()
             // Sondas read-only em serie no pollQueue: cada uma com watchdog
@@ -614,6 +623,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
         cliVersion = cli.currentVersion()
+        serviceVersion = cli.currentServiceVersion()
         let newPathDisplay = cli.resolvedPathInfo()
         if newPathDisplay != pathDisplay {
             pathDisplay = newPathDisplay
@@ -879,6 +889,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         controller.apply()
         expect(controller.updateItem.menu == nil, "CLI atualizada some com o aviso")
         controller.upstream = nil
+
+        // CLI nova com servico antigo de pe: pede restart na linha Apple.
+        controller.state = .running
+        controller.serviceVersion = "1.5.0"
+        controller.apply()
+        expect(controller.appleRowItem.title == "Apple Container 9.9.9 (running 1.5.0, restart to update)",
+               "servico com versao antiga pede restart")
+        controller.serviceVersion = "9.9.9"
+        controller.apply()
+        expect(controller.appleRowItem.title == "Apple Container 9.9.9",
+               "servico na mesma versao da CLI sem aviso")
+        controller.serviceVersion = nil
+        controller.cliVersion = nil
 
         // Ciclo de vida da linha de erro: entra, atualiza, sai.
         controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Start failed"),

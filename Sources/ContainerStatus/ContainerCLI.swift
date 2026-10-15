@@ -169,6 +169,40 @@ final class ContainerCLI: Sendable {
 
     func currentVersion() -> String? { pathLock.withLock { $0.resolved?.version } }
 
+    /// Versao do container-apiserver em execucao (nil com servico parado).
+    /// Depois de um upgrade da CLI o servico antigo segue de pe ate um
+    /// stop/start; o menu avisa quando as duas divergem.
+    func currentServiceVersion() -> String? { serviceLock.withLock { $0?.version } }
+
+    /// Tabela de `container system version`: linha do container-apiserver.
+    static func parseServiceVersion(_ table: String) -> String? {
+        for line in table.split(separator: "\n") {
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true)
+            if fields.count >= 2, fields[0] == "container-apiserver" {
+                return parseVersion("version \(fields[1])")
+            }
+        }
+        return nil
+    }
+
+    /// Consulta o servico so quando preciso: CLI trocou, start/stop do app,
+    /// ou versoes ainda divergem (restart feito pelo terminal aparece no
+    /// poll seguinte). Com tudo igual, nenhum processo extra por poll.
+    func refreshServiceVersion(running: Bool) {
+        guard running else {
+            serviceLock.withLock { $0 = nil }
+            return
+        }
+        let (revision, cliVersion) = pathLock.withLock { ($0.revision, $0.resolved?.version) }
+        let cached = serviceLock.withLock { $0 }
+        // nil = CLI sem `system version` ou saida sem apiserver: nao insiste.
+        if let cached, cached.revision == revision,
+           cached.version == nil || cached.version == cliVersion { return }
+        let result = run(["system", "version"], timeout: Self.statusTimeout)
+        let version = result.succeeded ? Self.parseServiceVersion(result.stdout) : nil
+        serviceLock.withLock { $0 = (revision, version) }
+    }
+
     /// Human-readable install info, served from the resolution cache (the
     /// symlink walk happens on the background queue, at resolution time).
     func resolvedPathInfo() -> String? {
@@ -178,6 +212,8 @@ final class ContainerCLI: Sendable {
     /// Resolved CLI path behind a lock so installs, upgrades and removals are
     /// picked up without restarting the app.
     private let pathLock: OSAllocatedUnfairLock<ResolutionState>
+    /// Versao do apiserver e a revisao da resolucao em que foi lida.
+    private let serviceLock = OSAllocatedUnfairLock<(revision: UInt64, version: String?)?>(initialState: nil)
     private let directories: [String]
     private let fallbackDirectories: [String]
     private let environment: [String: String]
@@ -229,6 +265,7 @@ final class ContainerCLI: Sendable {
     /// watchdog deixa o bootstrap em andamento no launchd e um segundo start
     /// colidiria com ele.
     func start() -> CLIRunResult {
+        serviceLock.withLock { $0 = nil }
         let plain = run(["system", "start"], timeout: Self.mutationTimeout)
         if plain.succeeded { return plain }
         if plain.timedOut { return plain }
@@ -240,7 +277,8 @@ final class ContainerCLI: Sendable {
     /// Stops the whole service stack (apiserver, machine-apiserver,
     /// core-images, vmnet).
     func stop() -> CLIRunResult {
-        run(["system", "stop"], timeout: Self.stopTimeout)
+        serviceLock.withLock { $0 = nil }
+        return run(["system", "stop"], timeout: Self.stopTimeout)
     }
 
     /// Contagem de containers rodando (`container ls --format json` lista os
