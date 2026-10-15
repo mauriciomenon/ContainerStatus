@@ -93,6 +93,9 @@ enum SelfTest {
         expect(ContainerCLI.runBinary("/usr/bin/false", arguments: [], timeout: 2).exitCode == 1, "/usr/bin/false = exit 1")
         let hung = ContainerCLI.runBinary("/bin/sleep", arguments: ["5"], timeout: 0.3)
         expect(hung.timedOut && !hung.succeeded, "watchdog mata processo estourado")
+        let stubborn = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "trap '' TERM; while :; do :; done"],
+                                              timeout: 0.3)
+        expect(stubborn.timedOut && !stubborn.succeeded, "filho que ignora SIGTERM cai no SIGKILL")
         // stderr acima do buffer do pipe (64KB) com stdout ainda aberto: com
         // leitura serial o filho travava no write ate o watchdog.
         let noisy = ContainerCLI.runBinary("/bin/sh",

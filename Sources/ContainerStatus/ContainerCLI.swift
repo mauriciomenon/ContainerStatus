@@ -389,8 +389,14 @@ final class ContainerCLI: Sendable {
             timedOut = true
             process.terminate()
             if semaphore.wait(timeout: .now() + 1.5) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                semaphore.wait()
+                // isRunning antes do kill: um pid ja colhido pode ter sido
+                // reciclado por outro processo. Espera com teto: filho preso
+                // no kernel nao pode congelar o pollQueue para sempre.
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                if semaphore.wait(timeout: .now() + 2) == .timedOut {
+                    return CLIRunResult(timedOut: true, spawned: true,
+                                        stderr: "processo nao terminou apos SIGKILL")
+                }
             }
         }
         // Teto para o caso de um processo neto segurar o pipe aberto. Se
