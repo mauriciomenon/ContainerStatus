@@ -329,7 +329,9 @@ final class ContainerCLI: Sendable {
         }
         let stdoutBox = IOBox()
         let stderrBox = IOBox()
-        let ioQueue = DispatchQueue(label: "local.containerstatus.io", qos: .utility)
+        // Fila concorrente: numa serial a leitura do stderr so comecava apos
+        // EOF do stdout, e um filho com stderr cheio travava no write.
+        let ioQueue = DispatchQueue.global(qos: .utility)
         let ioGroup = DispatchGroup()
         ioGroup.enter()
         ioQueue.async {

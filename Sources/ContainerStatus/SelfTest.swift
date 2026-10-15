@@ -71,6 +71,13 @@ enum SelfTest {
         expect(ContainerCLI.runBinary("/usr/bin/false", arguments: [], timeout: 2).exitCode == 1, "/usr/bin/false = exit 1")
         let hung = ContainerCLI.runBinary("/bin/sleep", arguments: ["5"], timeout: 0.3)
         expect(hung.timedOut && !hung.succeeded, "watchdog mata processo estourado")
+        // stderr acima do buffer do pipe (64KB) com stdout ainda aberto: com
+        // leitura serial o filho travava no write ate o watchdog.
+        let noisy = ContainerCLI.runBinary("/bin/sh",
+                                           arguments: ["-c", "head -c 200000 /dev/zero | tr '\\0' x >&2; echo ok"],
+                                           timeout: 3)
+        expect(noisy.succeeded && noisy.stdout == "ok" && noisy.stderr.count == 200_000,
+               "stderr grande nao trava a leitura do stdout")
 
         if includeUI {
             StatusItemController.checkMenuErrors(expect: expect)
