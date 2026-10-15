@@ -533,9 +533,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// leitura em voo iniciada antes da mutacao e descartada no absorb.
     private var mutationEpoch = 0
 
+    /// Um ciclo por vez: com sondas travadas um ciclo passa dos 3s do timer,
+    /// e enfileirar o proximo mesmo assim fazia a fila crescer sem limite.
+    private var pollInFlight = false
+
     /// Captura a epoca no main actor ANTES de enfileirar a leitura; o absorb
     /// so aceita leituras da epoca corrente.
     private func spawnPoll(sequence: Int) {
+        guard !pollInFlight else { return }
+        pollInFlight = true
         let epoch = mutationEpoch
         pollQueue.async { [cli, runtimes, vmnet, weak self] in
             let result = cli.checkStatus()
@@ -556,6 +562,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
             let vmnetStatus = vmnet.currentStatus()
             Task { @MainActor [weak self] in
+                self?.pollInFlight = false
                 self?.absorb(poll: result, containers: containers, runtimes: states, info: info,
                              vmnet: vmnetStatus, sequence: sequence, epoch: epoch)
             }
@@ -985,6 +992,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(lumeController.lumeRowItem.menu != nil
                && lumeController.lumeDetectItem.title == "Enable Daemon",
                "lume detectado oferece habilitar o daemon")
+
+        // Poll em voo: um segundo pedido no meio e descartado, nao enfileirado.
+        let applied = lumeController.lastAppliedSequence
+        lumeController.spawnPoll(sequence: applied + 10)
+        lumeController.spawnPoll(sequence: applied + 20)
+        let pollDeadline = Date().addingTimeInterval(5)
+        while Date() < pollDeadline && lumeController.pollInFlight {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(!lumeController.pollInFlight && lumeController.lastAppliedSequence == applied + 10,
+               "poll em voo descarta o pedido seguinte em vez de enfileirar")
 
         // Ordem: epoca e sequencia seguem descartando leituras velhas.
         let epochBefore = toggleController.mutationEpoch
