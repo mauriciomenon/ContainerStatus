@@ -1070,7 +1070,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                                 poll: (.running, nil), containers: [])
         toggleController.absorb(poll: (.stopped, nil), sequence: Int.max,
                                 epoch: epochBefore)
-        expect(toggleController.runtimeStates["Colima"] == .running,
+        // O poll velho so muda o estado Apple: e ele (e a sequencia) que
+        // revela se o guard de epoca segurou.
+        expect(toggleController.state == .running && toggleController.lastAppliedSequence != Int.max,
                "poll de epoca anterior nao sobrescreve o toggle")
     }
     // MARK: Launch at login
