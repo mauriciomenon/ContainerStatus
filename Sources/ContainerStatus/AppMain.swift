@@ -54,7 +54,8 @@ struct AppMain {
         if vmnet.fusionInstalled {
             let (vmnetState, vmCount) = vmnet.currentStatus()
             let text = vmnetState == .running ? "ativo" : "parado"
-            print("VMware vmnet: \(text)\(vmCount > 0 ? " (\(vmCount) VM)" : "")")
+            let elevation = VmnetProbe.isRootOwned(vmnet.vmnetCliPath) ? "elevacao permitida" : "elevacao recusada"
+            print("VMware vmnet: \(text)\(vmCount > 0 ? " (\(vmCount) VM)" : "") [\(elevation)]")
         } else {
             print("VMware vmnet: Fusion nao instalado")
         }

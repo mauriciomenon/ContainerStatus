@@ -305,8 +305,30 @@ final class VmnetProbe: Sendable {
     }
 
     func start() -> CLIRunResult {
-        ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript()],
-                               timeout: Self.startTimeout)
+        guard Self.isRootOwned(vmnetCliPath) else {
+            return CLIRunResult(stderr: "vmnet-cli nao pertence ao root ou e gravavel; elevacao recusada")
+        }
+        return ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript()],
+                                      timeout: Self.startTimeout)
+    }
+
+    /// O binario roda como root apos a senha: se o usuario (ou quem roda
+    /// como ele) pudesse troca-lo, o dialogo viraria escalada de privilegio.
+    /// Exige dono root e nada gravavel por grupo/outros no arquivo e nos
+    /// diretorios do caminho.
+    static func isRootOwned(_ path: String) -> Bool {
+        var url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        while true {
+            var metadata = stat()
+            guard lstat(url.path, &metadata) == 0, metadata.st_uid == 0 else { return false }
+            let isDirectory = metadata.st_mode & S_IFMT == S_IFDIR
+            // /Applications e root:admin 775 por padrao no macOS: grupo admin
+            // ja e quem pode digitar a senha, entao so "outros" conta ali.
+            let forbidden = isDirectory && url.path == "/Applications" ? S_IWOTH : S_IWGRP | S_IWOTH
+            guard metadata.st_mode & forbidden == 0 else { return false }
+            if url.path == "/" { return true }
+            url.deleteLastPathComponent()
+        }
     }
 }
 

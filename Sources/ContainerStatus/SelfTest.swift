@@ -391,6 +391,13 @@ enum SelfTest {
         expect(ContainerCLI.runBinary("/usr/bin/osacompile", arguments: ["-o", compiled, "-e", script],
                                       timeout: 10).succeeded,
                "script de subida do vmnet compila no AppleScript")
+        // Elevacao so com vmnet-cli do root: o stub do usuario e recusado
+        // antes de qualquer dialogo de senha.
+        let refused = running.start()
+        expect(!refused.succeeded && refused.stderr.contains("elevacao recusada"),
+               "vmnet-cli do usuario nao e elevado a root")
+        expect(VmnetProbe.isRootOwned("/usr/bin/true"), "binario do sistema passa na checagem de dono")
+        expect(!VmnetProbe.isRootOwned(vmnetCli.path), "binario do usuario falha na checagem de dono")
         let tricky = VmnetProbe(fusionAppPath: "/tmp/it's \"odd\" \\ $(x).app").startScript()
         expect(ContainerCLI.runBinary("/usr/bin/osacompile", arguments: ["-o", compiled, "-e", tricky],
                                       timeout: 10).succeeded,
