@@ -465,7 +465,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         switch state {
         case .running: item.button?.toolTip = "Apple Container\(versionSuffix): running"
         case .stopped: item.button?.toolTip = "Apple Container\(versionSuffix): stopped"
-        case .notInstalled: item.button?.toolTip = "Apple Container: CLI not found"
+        case .notInstalled:
+            // Timeout do status tambem cai aqui: com caminho resolvido a CLI
+            // existe e so nao respondeu.
+            item.button?.toolTip = pathDisplay == nil
+                ? "Apple Container: CLI not found"
+                : "Apple Container\(versionSuffix): not responding"
         }
 
         switch activity {
@@ -973,6 +978,20 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         expect(toggleController.runtimeStates["Colima"] == .running,
                "clique segue o rotulo exibido, nao uma releitura do estado")
+
+        // Tooltip do ponto: CLI ausente x CLI presente que nao respondeu.
+        toggleController.state = .notInstalled
+        toggleController.pathDisplay = nil
+        toggleController.apply()
+        expect(toggleController.item.button?.toolTip == "Apple Container: CLI not found",
+               "sem CLI o tooltip diz nao encontrada")
+        toggleController.pathDisplay = "/usr/local/bin/container"
+        toggleController.cliVersion = "1.5.0"
+        toggleController.apply()
+        expect(toggleController.item.button?.toolTip == "Apple Container 1.5.0: not responding",
+               "CLI presente com status estourado diz que nao respondeu")
+        toggleController.pathDisplay = nil
+        toggleController.cliVersion = nil
 
         // Login: sucesso apos falha limpa o erro de login, nao o de outros.
         toggleController.recordLoginResult(error: CocoaError(.featureUnsupported))
