@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import os
 import ServiceManagement
 
 @main
@@ -56,6 +57,23 @@ struct AppMain {
             print("VMware vmnet: \(text)\(vmCount > 0 ? " (\(vmCount) VM)" : "")")
         } else {
             print("VMware vmnet: Fusion nao instalado")
+        }
+        // Release do GitHub contra a CLI instalada: o mesmo caminho do menu.
+        let fetched = OSAllocatedUnfairLock<UpstreamRelease?>(initialState: nil)
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            let release = await UpstreamRelease.fetchLatest()
+            fetched.withLock { $0 = release }
+            done.signal()
+        }
+        done.wait()
+        let installed = ContainerCLI.resolveNewest()?.version
+        if let release = fetched.withLock({ $0 }) {
+            let pending = UpstreamRelease.update(release, installed: installed) != nil
+            print("apple/container no GitHub: \(release.version) (instalada: \(installed ?? "nenhuma"))"
+                  + (pending ? " - atualizacao disponivel" : ""))
+        } else {
+            print("apple/container no GitHub: consulta falhou")
         }
         exit(0)
     }

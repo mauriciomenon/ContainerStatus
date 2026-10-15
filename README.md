@@ -75,7 +75,12 @@ cada checagem enquanto nao for encontrado, sem restart):
 | `container system start` | acao "Ligar daemon" | 40s |
 | `container system start --disable-kernel-install` | so se o start puro falhar com erro explicito | 40s |
 | `container system stop` | acao "Desligar daemon" | 40s |
-| `container --version` | descoberta ou alteracao de uma instalacao | 2s |
+| `container --version` | descoberta ou alteracao de uma instalacao; repetido no poll seguinte se falhar | 5s |
+
+**Unica conexao de rede:** `GET https://api.github.com/repos/apple/container/releases/latest`
+no arranque, a cada 6h e no rescan do cabecalho, sem token e sem enviar
+dados da maquina. Quando a release publicada supera a CLI instalada, o
+bloco Apple ganha "Update available: x.y.z", que abre a pagina da release.
 
 ### Onde ele procura a CLI (independente de maquina)
 

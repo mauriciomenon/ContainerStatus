@@ -46,6 +46,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var vmCount = 0
     private var vmnetBusy = false
     private var cliVersion: String?
+    /// Ultima release do apple/container vista no GitHub (nil ate a 1a consulta).
+    private var upstream: UpstreamRelease?
+    private var upstreamTask: Task<Void, Never>?
     private var pathDisplay: String?
     /// App version shown next to the "Sobre ContainerStatus" item.
     private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
@@ -67,6 +70,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var containerRowItems: [NSMenuItem] = []
     private let actionItem = NSMenuItem()
     private let githubItem = NSMenuItem()
+    /// So aparece quando a release do GitHub supera a CLI instalada.
+    private let updateItem = NSMenuItem()
     // Bloco Docker: daemon (sem toggle) + familia indentada (so detectados)
     private let dockerRowItem = NSMenuItem()
     private let dockerDetectItem = NSMenuItem()
@@ -167,10 +172,27 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     func applicationDidFinishLaunching(_ notification: Notification) {
         startPolling()
         refreshNow()
+        startUpstreamChecks()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         pollTimer?.cancel()
+        upstreamTask?.cancel()
+    }
+
+    /// Consulta a release mais nova no arranque e a cada checkInterval. A
+    /// requisicao roda fora da main (URLSession); so o resultado volta.
+    private func startUpstreamChecks() {
+        upstreamTask?.cancel()
+        upstreamTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if let release = await UpstreamRelease.fetchLatest() {
+                    self?.upstream = release
+                    self?.apply()
+                }
+                try? await Task.sleep(for: .seconds(UpstreamRelease.checkInterval))
+            }
+        }
     }
 
     // MARK: Menu
@@ -188,6 +210,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         githubItem.indentationLevel = 1
         githubItem.target = self
         githubItem.action = #selector(openAppleAbout(_:))
+        updateItem.indentationLevel = 1
+        updateItem.target = self
+        updateItem.action = #selector(openUpdate(_:))
         dockerRowItem.isEnabled = false
         dockerRowItem.indentationLevel = 1
         dockerDetectItem.isEnabled = false
@@ -297,6 +322,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         actionItem.isEnabled = activity == .none && state != .notInstalled
         place(actionItem, present: state != .notInstalled)
         place(githubItem, present: true)
+        let update = UpstreamRelease.update(upstream, installed: cliVersion)
+        if let update {
+            updateItem.title = "Update available: \(update.version)"
+        }
+        place(updateItem, present: update != nil)
 
         // ---- Bloco Docker: daemon sem toggle + familia indentada ----
         place(sepDocker, present: true)
@@ -677,6 +707,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.cancelTracking()
         cli.rescan()
         refreshNow()
+        startUpstreamChecks()
+    }
+
+    @objc private func openUpdate(_ sender: NSMenuItem) {
+        menu.cancelTracking()
+        guard let url = upstream?.url else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func quitClicked(_ sender: Any) {
@@ -809,6 +846,22 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.githubItem.menu != nil && controller.githubItem.title == "GitHub"
                && controller.githubItem.indentationLevel == 1,
                "GitHub presente e indentado no bloco Apple")
+
+        // Aviso de release nova: so com CLI instalada mais velha que a do GitHub.
+        let newer = UpstreamRelease(version: "9.9.9",
+                                    url: URL(string: "https://github.com/apple/container/releases/tag/9.9.9")!)
+        controller.upstream = newer
+        controller.cliVersion = "1.5.0"
+        controller.apply()
+        expect(controller.updateItem.menu != nil && controller.updateItem.title == "Update available: 9.9.9",
+               "release nova no GitHub mostra o aviso no bloco Apple")
+        expect(controller.menu.index(of: controller.updateItem)
+               == controller.menu.index(of: controller.githubItem) + 1,
+               "aviso de atualizacao logo abaixo do GitHub")
+        controller.cliVersion = "9.9.9"
+        controller.apply()
+        expect(controller.updateItem.menu == nil, "CLI atualizada some com o aviso")
+        controller.upstream = nil
 
         // Ciclo de vida da linha de erro: entra, atualiza, sai.
         controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Start failed"),

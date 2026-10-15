@@ -65,6 +65,28 @@ enum SelfTest {
         expect(ContainerCLI.parseVersion("container CLI version 10.22.33") == "10.22.33", "parse dois digitos")
         expect(ContainerCLI.parseVersion("sem versao aqui") == nil, "parse de texto sem versao")
 
+        // Release do GitHub: parse do JSON da API e comparacao com a instalada.
+        func release(_ json: String) -> UpstreamRelease? { UpstreamRelease.parse(Data(json.utf8)) }
+        let link = "https://github.com/apple/container/releases/tag/1.6.0"
+        expect(release("{\"tag_name\":\"1.6.0\",\"html_url\":\"\(link)\"}")?.version == "1.6.0",
+               "release do GitHub: tag numerica")
+        expect(release("{\"tag_name\":\"v1.6.0\",\"html_url\":\"\(link)\"}")?.version == "1.6.0",
+               "release do GitHub: prefixo v removido")
+        expect(release("{\"tag_name\":\"1.6.0-rc1\",\"html_url\":\"\(link)\"}") == nil,
+               "release do GitHub: tag nao numerica ignorada")
+        expect(release("{\"tag_name\":\"1.6.0\",\"html_url\":\"https://evil.example/x\"}") == nil,
+               "release do GitHub: link fora de github.com ignorado")
+        expect(release("{\"message\":\"API rate limit exceeded\"}") == nil && release("lixo") == nil,
+               "release do GitHub: resposta de erro = nil")
+        let latest = release("{\"tag_name\":\"1.6.0\",\"html_url\":\"\(link)\"}")
+        expect(UpstreamRelease.update(latest, installed: "1.5.0") == latest,
+               "release mais nova que a instalada = aviso")
+        expect(UpstreamRelease.update(latest, installed: "1.6.0") == nil
+               && UpstreamRelease.update(latest, installed: "1.10.0") == nil,
+               "instalada igual ou mais nova = sem aviso")
+        expect(UpstreamRelease.update(latest, installed: nil) == nil,
+               "sem CLI instalada = sem aviso de atualizacao")
+
         // Spawn plumbing against foreign binaries: exit codes, success flag
         // and the watchdog killing a process that exceeds its budget.
         expect(ContainerCLI.runBinary("/usr/bin/true", arguments: [], timeout: 2).succeeded, "/usr/bin/true = sucesso")
