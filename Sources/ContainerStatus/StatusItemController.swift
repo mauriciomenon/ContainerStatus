@@ -301,23 +301,23 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // ---- Bloco Docker: daemon sem toggle + familia indentada ----
         place(sepDocker, present: true)
         place(dockerRowItem, present: true)
-        let dockerProbe = runtimes.first { $0.label == "Docker" }
+        // Tooltips vem do cache montado fora da main (spawnPoll/finishRuntime):
+        // tooltipInfo dispara processos e travaria o menu aqui.
         let dockerState = runtimeStates["Docker"] ?? .notInstalled
         dockerRowItem.title = "Docker: \(dockerState == .running ? "Running" : "Not Running")"
-        dockerRowItem.toolTip = dockerProbe.flatMap { $0.tooltipInfo(state: dockerState) }
+        dockerRowItem.toolTip = runtimeInfo["Docker"]
         dockerDetectItem.title = dockerState == .notInstalled ? "Not Detected" : "Detected"
         place(dockerDetectItem, present: true)
 
         for config in RuntimeProbeConfig.dockerFamily {
             guard config.label != "Docker" else { continue }
-            let probe = runtimes.first { $0.label == config.label }
             let subState = runtimeStates[config.label] ?? .notInstalled
             guard let statusItem = subStatusItems[config.label],
                   let actionItem = subActionItems[config.label] else { continue }
             let detected = subState != .notInstalled
             if detected {
                 statusItem.title = "\(config.label): \(subState == .running ? "Running" : "Not Running")"
-                statusItem.toolTip = probe?.tooltipInfo(state: subState)
+                statusItem.toolTip = runtimeInfo[config.label]
                 statusItem.attributedTitle = NSAttributedString(
                     string: statusItem.title,
                     attributes: [.font: NSFont.menuFont(ofSize: 11),
@@ -352,12 +352,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // ---- Podman (bloco proprio) ----
         let podmanState = runtimeStates["Podman"] ?? .notInstalled
-        let podmanProbe = runtimes.first { $0.label == "Podman" }
         place(sepPodman, present: podmanState != .notInstalled)
         place(podmanRowItem, present: podmanState != .notInstalled)
         if podmanState != .notInstalled {
             podmanRowItem.title = "Podman: \(podmanState == .running ? "Running" : "Not Running")"
-            podmanRowItem.toolTip = podmanProbe.flatMap { $0.tooltipInfo(state: podmanState) }
+            podmanRowItem.toolTip = runtimeInfo["Podman"]
             podmanRowItem.indentationLevel = 1
             if runtimeActivity["Podman"] == true {
                 podmanActionItem.title = "Working..."
@@ -371,12 +370,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // ---- Lume (bloco proprio, sem toggle) ----
         let lumeState = runtimeStates["Lume"] ?? .notInstalled
-        let lumeProbe = runtimes.first { $0.label == "Lume" }
         place(sepLume, present: lumeState != .notInstalled)
         place(lumeRowItem, present: lumeState != .notInstalled)
         if lumeState != .notInstalled {
             lumeRowItem.title = "Lume: \(lumeState == .running ? "Running" : "Not Running")"
-            lumeRowItem.toolTip = lumeProbe.flatMap { $0.tooltipInfo(state: lumeState) }
+            lumeRowItem.toolTip = runtimeInfo["Lume"]
             lumeRowItem.indentationLevel = 1
             lumeRowItem.isEnabled = false
             if runtimeActivity["Lume"] == true {
@@ -553,11 +551,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if let runtimes {
             for (label, runtimeState) in runtimes {
                 self.runtimeStates[label] = runtimeState
-            }
-        }
-        if let info {
-            for (label, tooltip) in info {
-                self.runtimeInfo[label] = tooltip
+                // Ausente em info = sem tooltip agora (ex.: desinstalado);
+                // nao herda o texto do poll anterior.
+                self.runtimeInfo[label] = info?[label]
             }
         }
         lastAppliedSequence = sequence
@@ -838,7 +834,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         controller.absorb(poll: (.running, nil),
                           runtimes: ["Docker": .running, "OrbStack": .running,
                                      "Colima": .notInstalled, "Docker Desktop": .notInstalled],
+                          info: ["Docker": "contexto: orbstack"],
                           sequence: 2)
+        expect(controller.dockerRowItem.toolTip == "contexto: orbstack",
+               "tooltip do docker vem do cache do poll, sem spawn na main")
         expect(controller.dockerRowItem.title == "Docker: Running"
                && controller.dockerDetectItem.title == "Detected",
                "docker mostra estado e Detected")
@@ -858,6 +857,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.dockerDetectItem.title == "Not Detected"
                && controller.subStatusItems["OrbStack"]?.menu == nil,
                "sem deteccao o bloco Docker esvazia a familia")
+        expect(controller.dockerRowItem.toolTip == nil,
+               "poll sem informacao limpa o tooltip anterior")
 
         // Toggle de sub-provider: ciclo completo com stub stateful.
         let toggleDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
