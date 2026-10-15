@@ -683,16 +683,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
               let probe = runtimes.first(where: { $0.label == label }),
               probe.isControllable,
               runtimeActivity[label] != true else { return }
+        // A direcao e a do rotulo que o usuario clicou: reler o estado aqui
+        // podia transformar um "Start" clicado em stop, se o runtime subiu
+        // por fora nesse meio tempo. Start/stop repetidos sao inofensivos.
+        let turningOff = runtimeStates[label] == .running
         runtimeActivity[label] = true
         detail = nil
         detailIsLocal = false
         apply()
 
         Task.detached(priority: .userInitiated) { [weak self] in
-            // O estado do menu pode estar ate 3s velho; a direcao do toggle
-            // vem de uma leitura fresca, no momento do clique.
-            let fresh = probe.currentStatus().state
-            let turningOff = fresh == .running
             let result = turningOff ? probe.stop() : probe.start()
             // Controle pode retornar antes do runtime terminar de subir
             // (ex.: open -a do OrbStack e imediato, o app ainda nao responde);
@@ -961,6 +961,18 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         expect(toggleController.runtimeStates["Colima"] == .running,
                "toggle do sub-provider completa o ciclo")
+
+        // Menu mostra parado, runtime ja subiu por fora: o clique em
+        // "Enable Daemon" tem de pedir start, nunca stop.
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped],
+                                sequence: toggleController.lastAppliedSequence + 1)
+        toggleController.runtimeToggled(toggleController.subActionItems["Colima"] ?? NSMenuItem())
+        let staleDeadline = Date().addingTimeInterval(5)
+        while Date() < staleDeadline && toggleController.runtimeActivity["Colima"] == true {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(toggleController.runtimeStates["Colima"] == .running,
+               "clique segue o rotulo exibido, nao uma releitura do estado")
 
         // Login: sucesso apos falha limpa o erro de login, nao o de outros.
         toggleController.recordLoginResult(error: CocoaError(.featureUnsupported))
