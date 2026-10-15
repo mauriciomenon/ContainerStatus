@@ -496,14 +496,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
     }
 
-    private let cycleLock = OSAllocatedUnfairLock(initialState: 0)
-
-    private func nextCycle() -> Int {
-        cycleLock.withLock { value in
-            value += 1
-            return value
-        }
-    }    /// Barreira de mutacao: finish()/finishRuntime() avancam a epoca e toda
+    /// Barreira de mutacao: finish()/finishRuntime() avancam a epoca e toda
     /// leitura em voo iniciada antes da mutacao e descartada no absorb.
     private var mutationEpoch = 0
 
@@ -511,7 +504,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// so aceita leituras da epoca corrente.
     private func spawnPoll(sequence: Int) {
         let epoch = mutationEpoch
-        let cycle = nextCycle()
         pollQueue.async { [cli, runtimes, vmnet, weak self] in
             let result = cli.checkStatus()
             // Uma chamada so alimenta contagem e lista do menu.
@@ -523,9 +515,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             var states: [String: ExternalRuntimeState] = [:]
             var info: [String: String] = [:]
             for probe in runtimes {
-                // Cadencia por sonda: caras (lume ~0.9s) rodam a cada N
-                // ciclos; quem nao vence mantem o ultimo estado no absorb.
-                if (cycle - 1) % probe.config.pollEvery != 0 { continue }
                 let (state, _) = probe.currentStatus()
                 states[probe.label] = state
                 if let tooltip = probe.tooltipInfo(state: state) {

@@ -34,9 +34,9 @@ struct RuntimeProbeConfig: Sendable {
     /// Contagem de containers ativos do runtime (`ps -q` = uma linha por
     /// container); nil desativa. So faz sentido com o runtime de pe.
     let countArguments: [String]?
-    /// Rodar a sonda a cada N ciclos de poll (1 = todo ciclo). Para CLIs
-    /// caras: lume ls custa ~0.9s por chamada, as outras ficam em centesimos.
-    let pollEvery: Int
+    /// Binario absoluto que responde o status no lugar do proprio runtime
+    /// (ex.: launchctl para servico brew); a deteccao continua pelo binaryName.
+    let statusBinary: String?
     /// Caminho de app que marca a instalacao (ex.: /Applications/Docker.app).
     /// Quando setado, "detectado" passa a ser existencia deste caminho, nao
     /// do binario - providers de app (Docker Desktop, Rancher) sobrevivem ao
@@ -53,7 +53,7 @@ struct RuntimeProbeConfig: Sendable {
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
          control: RuntimeControl? = nil, info: RuntimeInfo? = nil,
          autoStartPatterns: [String] = [], countArguments: [String]? = nil,
-         pollEvery: Int = 1, detectAppPath: String? = nil, nature: String = "",
+         statusBinary: String? = nil, detectAppPath: String? = nil, nature: String = "",
          appBased: Bool = false) {
         self.label = label
         self.binaryName = binaryName
@@ -63,7 +63,7 @@ struct RuntimeProbeConfig: Sendable {
         self.info = info
         self.autoStartPatterns = autoStartPatterns
         self.countArguments = countArguments
-        self.pollEvery = max(1, pollEvery)
+        self.statusBinary = statusBinary
         self.detectAppPath = detectAppPath
         self.nature = nature
         self.appBased = appBased
@@ -146,22 +146,27 @@ extension RuntimeProbeConfig {
         nature: "podman machine (VM)"
     )
 
-    /// `lume ls --format json` lista as VMs com campo de estado; exit 0
-    /// tambem quando nao ha VMs. Rodando = alguma VM "running". Read-only:
-    /// liga/desliga VM por nome, e o servidor vive em background. O brew
-    /// services instala LaunchAgent de auto-start (planta desta maquina).
-    static let lume = RuntimeProbeConfig(
-        label: "Lume", binaryName: "lume", statusArguments: ["ls", "--format", "json"],
-        interpret: { $0.spawned && $0.stdout.contains("\"running\"") ? .running : .stopped },
-        control: RuntimeControl(
-            startBinary: "brew", startArguments: ["services", "start", "homebrew.mxcl.lume"],
-            startTimeout: 60,
-            stopBinary: "brew", stopArguments: ["services", "stop", "homebrew.mxcl.lume"],
-            stopTimeout: 60),
-        autoStartPatterns: ["homebrew.mxcl.lume"],
-        pollEvery: 5,
-        nature: "LaunchAgent homebrew.mxcl.lume (brew services)"
-    )
+    /// O toggle controla o servidor `lume serve` (servico brew), entao o
+    /// estado e o do LaunchAgent no launchd, nao o das VMs: servidor de pe
+    /// sem VM nenhuma e "Running". `brew services` recebe o nome da formula
+    /// (`lume`), nao o label do launchd.
+    static let lume = makeLume()
+
+    static func makeLume(launchctl: String = "/bin/launchctl") -> RuntimeProbeConfig {
+        RuntimeProbeConfig(
+            label: "Lume", binaryName: "lume",
+            statusArguments: ["print", "gui/\(getuid())/homebrew.mxcl.lume"],
+            interpret: { $0.succeeded && $0.stdout.contains("state = running") ? .running : .stopped },
+            control: RuntimeControl(
+                startBinary: "brew", startArguments: ["services", "start", "lume"],
+                startTimeout: 60,
+                stopBinary: "brew", stopArguments: ["services", "stop", "lume"],
+                stopTimeout: 60),
+            autoStartPatterns: ["homebrew.mxcl.lume"],
+            statusBinary: launchctl,
+            nature: "LaunchAgent homebrew.mxcl.lume (brew services)"
+        )
+    }
 
     /// Docker Desktop: presenca pelo app; status pelo processo; toggle dele
     /// mesmo, porque quando instalado E o dono do daemon docker.
@@ -333,7 +338,7 @@ final class RuntimeProbe: Sendable {
         guard let path = resolvedPath() else {
             return (.notInstalled, nil)
         }
-        let result = ContainerCLI.runBinary(path, arguments: config.statusArguments,
+        let result = ContainerCLI.runBinary(config.statusBinary ?? path, arguments: config.statusArguments,
                                             timeout: Self.statusTimeout)
         guard result.spawned, !result.timedOut else {
             return (.stopped, path)

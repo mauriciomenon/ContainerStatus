@@ -329,16 +329,29 @@ enum SelfTest {
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped, "podman sem maquina = desligado")
 
-        // Lume: JSON de ls com VM running (exit 0 mesmo sem VMs).
+        // Lume: estado do servidor no launchd (launchctl print), nao das VMs.
         let lumeDirectory = temporary.appendingPathComponent("lume", isDirectory: true)
         try FileManager.default.createDirectory(at: lumeDirectory, withIntermediateDirectories: false)
-        _ = try stub("lume", lumeDirectory,
-                 stdout: "[{\"name\":\"macos\",\"status\":\"running\"}]", exitCode: 0)
-        expect(RuntimeProbe(config: .lume, directories: [lumeDirectory.path])
-            .currentStatus().state == .running, "lume com VM running = ligado")
-        _ = try stub("lume", lumeDirectory, stdout: "[\n\n]", exitCode: 0)
-        expect(RuntimeProbe(config: .lume, directories: [lumeDirectory.path])
-            .currentStatus().state == .stopped, "lume sem VMs = desligado")
+        _ = try bare("lume", lumeDirectory, exitCode: 0)
+        let launchctlDirectory = temporary.appendingPathComponent("launchctl", isDirectory: true)
+        try FileManager.default.createDirectory(at: launchctlDirectory, withIntermediateDirectories: false)
+        let launchctl = try stub("launchctl", launchctlDirectory,
+                                 stdout: "gui/501/homebrew.mxcl.lume = {\n\tstate = running\n}", exitCode: 0)
+        let lumeConfig = RuntimeProbeConfig.makeLume(launchctl: launchctl)
+        expect(RuntimeProbe(config: lumeConfig, directories: [lumeDirectory.path])
+            .currentStatus().state == .running, "lume com servidor de pe = ligado")
+        _ = try stub("launchctl", launchctlDirectory,
+                     stdout: "gui/501/homebrew.mxcl.lume = {\n\tstate = not running\n}", exitCode: 0)
+        expect(RuntimeProbe(config: lumeConfig, directories: [lumeDirectory.path])
+            .currentStatus().state == .stopped, "lume com servico carregado e parado = desligado")
+        _ = try stub("launchctl", launchctlDirectory, stdout: "Could not find service", exitCode: 113)
+        expect(RuntimeProbe(config: lumeConfig, directories: [lumeDirectory.path])
+            .currentStatus().state == .stopped, "lume sem servico no launchd = desligado")
+        expect(RuntimeProbe(config: lumeConfig, directories: ["/no/such/dir"])
+            .currentStatus().state == .notInstalled, "lume sem binario = nao instalado")
+        expect(RuntimeProbeConfig.lume.control?.startArguments == ["services", "start", "lume"]
+               && RuntimeProbeConfig.lume.control?.stopArguments == ["services", "stop", "lume"],
+               "brew services recebe o nome da formula lume")
 
         // Auto-start (passo 3): LaunchAgent presente marca o runtime; ausente
         // = nil. Diretorio injetavel para teste deterministico.
