@@ -259,8 +259,17 @@ enum SelfTest {
 
         let script = running.startScript()
         expect(script.contains("vmnet-cli") && script.contains("with administrator privileges")
-               && script.contains("--start") && !script.contains("--stop \""),
-               "script de subida pede admin e so sobe")
+               && script.contains("--start"),
+               "script de subida pede admin e sobe")
+        // Compila sem executar: aspas cruas no literal quebravam a sintaxe.
+        let compiled = temporary.appendingPathComponent("vmnet.scpt").path
+        expect(ContainerCLI.runBinary("/usr/bin/osacompile", arguments: ["-o", compiled, "-e", script],
+                                      timeout: 10).succeeded,
+               "script de subida do vmnet compila no AppleScript")
+        let tricky = VmnetProbe(fusionAppPath: "/tmp/it's \"odd\" \\ $(x).app").startScript()
+        expect(ContainerCLI.runBinary("/usr/bin/osacompile", arguments: ["-o", compiled, "-e", tricky],
+                                      timeout: 10).succeeded,
+               "escape do vmnet resiste a aspas, barra e $()")
     }
 
     /// Receitas dos demais runtimes do roadmap, com binarios simulados que

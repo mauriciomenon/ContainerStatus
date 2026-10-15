@@ -272,11 +272,15 @@ final class VmnetProbe: Sendable {
 
     /// Comando de subida com elevacao: o macOS pede a senha no dialogo de
     /// administrador. Para o repair: para (best-effort) e sobe de novo.
+    /// Duas camadas de escape: o caminho vai entre aspas simples para o
+    /// shell, e o comando inteiro vira literal AppleScript. Aspas duplas
+    /// cruas dentro do literal quebravam a compilacao do script.
     func startScript() -> String {
-        let cli = vmnetCliPath.replacingOccurrences(of: "\\", with: "\\\\")
+        let quoted = "'" + vmnetCliPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let shell = "\(quoted) --stop >/dev/null 2>&1; \(quoted) --start"
+        let literal = shell.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
-        let inner = "\"\(cli)\" --stop >/dev/null 2>&1; \"\(cli)\" --start"
-        return "do shell script \"\(inner)\" with administrator privileges"
+        return "do shell script \"\(literal)\" with administrator privileges"
     }
 
     func start() -> CLIRunResult {
