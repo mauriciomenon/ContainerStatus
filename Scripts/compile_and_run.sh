@@ -34,20 +34,22 @@ if [[ "${RUN_TESTS}" == "1" ]]; then
   "$TEST_BIN_DIR/$APP_NAME" --selftest
 fi
 
-log "==> Killing existing ${APP_NAME} instances"
-pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
-pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
-pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
-pkill -x "${APP_NAME}" 2>/dev/null || true
-
 HOST_ARCH="$(uname -m)"
 ARCHES_VALUE="${HOST_ARCH}"
 if [[ -n "${RELEASE_ARCHES}" ]]; then
   ARCHES_VALUE="${RELEASE_ARCHES}"
 fi
 
+# Encerra a instancia em uso so depois do build: falha de compilacao ou
+# assinatura nao deixa o usuario sem o app.
 log "==> package app"
 SIGNING_MODE=adhoc ARCHES="${ARCHES_VALUE}" "${ROOT_DIR}/Scripts/package_app.sh" release
+
+log "==> Killing existing ${APP_NAME} instances"
+pkill -f "/${APP_PROCESS_PATTERN}\$" 2>/dev/null || true
+pkill -f "^${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
+pkill -f "^${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
+pkill -x "${APP_NAME}" 2>/dev/null || true
 
 log "==> launch app"
 if ! open "${APP_BUNDLE}"; then

@@ -12,6 +12,14 @@ MENU_BAR_APP=${MENU_BAR_APP:-1}
 SIGNING_MODE=${SIGNING_MODE:-}
 APP_IDENTITY=${APP_IDENTITY:-}
 
+# APP_NAME vai para rm -rf e ambos para o Info.plist: so nomes simples.
+for value in "$APP_NAME" "$BUNDLE_ID"; do
+  if [[ ! "$value" =~ ^[A-Za-z0-9._-]+$ || "$value" == *..* ]]; then
+    echo "Invalid APP_NAME/BUNDLE_ID: $value" >&2
+    exit 1
+  fi
+done
+
 read_version_env() {
   local file=$1 line key value
   local saw_marketing=0

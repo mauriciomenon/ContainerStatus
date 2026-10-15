@@ -6,15 +6,18 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_NAME=${APP_NAME:-ContainerStatus}
 APP_PATH="$PROJECT_ROOT/${APP_NAME}.app"
 
-echo "==> Killing existing ${APP_NAME} instances"
-pkill -x "$APP_NAME" || pkill -f "${APP_NAME}.app" || true
-sleep 0.5
-
+# Confere o bundle antes de encerrar: sem ele a instancia em uso fica de pe.
 if [[ ! -d "$APP_PATH" ]]; then
     echo "ERROR: ${APP_NAME}.app not found at $APP_PATH"
     echo "Run ./Scripts/package_app.sh first to build the app"
     exit 1
 fi
+
+echo "==> Killing existing ${APP_NAME} instances"
+# -x compara o nome exato; -f "<nome>.app" casava qualquer linha de comando
+# que citasse o caminho (editor, tail de log).
+pkill -x "$APP_NAME" || true
+sleep 0.5
 
 echo "==> Launching ${APP_NAME} from $APP_PATH"
 open -n "$APP_PATH"
