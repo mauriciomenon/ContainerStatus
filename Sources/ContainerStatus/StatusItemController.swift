@@ -962,6 +962,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(toggleController.runtimeStates["Colima"] == .running,
                "toggle do sub-provider completa o ciclo")
 
+        // Login: sucesso apos falha limpa o erro de login, nao o de outros.
+        toggleController.recordLoginResult(error: CocoaError(.featureUnsupported))
+        toggleController.apply()
+        expect(toggleController.errorItem.menu != nil, "falha de login mostra linha de erro")
+        toggleController.recordLoginResult(error: nil)
+        toggleController.apply()
+        expect(toggleController.errorItem.menu == nil, "login com sucesso apaga o erro de login anterior")
+        toggleController.detail = "vmnet: falha ao subir"
+        toggleController.detailIsLocal = true
+        toggleController.recordLoginResult(error: nil)
+        expect(toggleController.detail == "vmnet: falha ao subir",
+               "login com sucesso preserva erro de outra operacao")
+        toggleController.detail = nil
+        toggleController.detailIsLocal = false
+
         // Cancelar dialogo do vmnet nao e falha.
         toggleController.finishVmnet(
             result: CLIRunResult(exitCode: 2, spawned: true, stderr: "User canceled. (-128)"),
@@ -1037,12 +1052,24 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             } else {
                 try service.register()
             }
+            recordLoginResult(error: nil)
         } catch {
-            detail = "Login: \(error.localizedDescription)"
-            detailIsLocal = true
+            recordLoginResult(error: error)
         }
         loginStatusCache = Self.loginStatus
         apply()
+    }
+
+    /// Falha grava o erro local; sucesso apaga so um erro de login anterior
+    /// (erro de outra operacao continua visivel).
+    private func recordLoginResult(error: Error?) {
+        if let error {
+            detail = "Login: \(error.localizedDescription)"
+            detailIsLocal = true
+        } else if detail?.hasPrefix("Login: ") == true {
+            detail = nil
+            detailIsLocal = false
+        }
     }
 
     @objc private func openAppleAbout(_ sender: NSMenuItem) {
