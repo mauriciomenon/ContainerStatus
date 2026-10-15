@@ -12,26 +12,30 @@ controla o servico Apple `container` (github.com/apple/container).
 - Clique abre o menu, nesta ordem:
 
 ```
-Apple Container x.y.z            versao da CLI em uso
-/usr/local/bin/container         caminho resolvido; "destino via symlink"
-                                 quando a instalacao e um link (ex.: brew)
+Container Status x.y.z        ⟳   rescan: CLI, sondas e release no GitHub
 -----------------------------
-Status: Ligado (2 containers)   contagem de containers rodando
-web - 2048 MB                   containers de pe (ate 8, id e memoria)
-Status: Ligado / Desligado / Nao instalado
-Colima / Docker / Podman /      linha por runtime instalado; clicavel
-Lume / OrbStack: ...            onde ha controle (ROADMAP passo 2);
-                                tooltip mostra contexto do docker,
-                                auto-start por LaunchAgent e contagem
-VMware vmnet: Ativo - 1 VM      so com Fusion instalado
-Subir rede virtual (vmnet)       pede senha de admin; nao ha desligar
-Ligar daemon / Desligar daemon   sem a CLI, vira o link do projeto
+Apple Container x.y.z            versao da CLI em uso; "(running a.b.c,
+                                 restart to update)" se o servico de pe
+                                 for de versao anterior
+  /usr/local/bin/container       caminho resolvido; "destino via symlink"
+  Status: Running (2 containers)
+  web - 2048 MB                  containers de pe (ate 8, id e memoria)
+  Enable Daemon / Disable Daemon oculto sem a CLI
+  GitHub                         abre github.com/apple/container
+  Update available: x.y.z        so quando a release supera a instalada
+-----------------------------
+  Docker: Running / Not Running  daemon (sem toggle; tooltip: contexto)
+  Detected / Not Detected
+    OrbStack, Colima, Docker     so os detectados, com Start/Stop ou
+    Desktop, Rancher, Finch      Enable/Disable proprio
+-----------------------------    blocos abaixo so quando detectados
+  Podman: ...  + Enable/Disable Daemon
+  Lume: ...    + Enable/Disable Daemon (servico brew lume serve)
+  VMware vmnet: Running - 1 VM + Enable Daemon (senha de admin; sem desligar)
+-----------------------------
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
-Abrir no login                   (SMAppService, sem permissoes extras)
------------------------------
-Sobre Apple Container            abre github.com/apple/container
-Sobre ContainerStatus x.y.z      painel Sobre do app
-Sair
+Open at Login                    SMAppService, sem permissoes extras
+About                      Quit
 ```
 
 - A linha de erro de um toggle que falhou permanece visivel (nao e apagada
