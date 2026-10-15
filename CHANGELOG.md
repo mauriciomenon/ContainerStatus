@@ -1,0 +1,37 @@
+# Changelog
+
+Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
+
+## [Unreleased]
+
+### Adicionado
+- Aviso "Update available: x.y.z" quando sai release nova do apple/container
+  (API do GitHub no arranque, a cada 6h e no rescan; unica conexao de rede).
+- Aviso "(running x.y.z, restart to update)" quando o servico de pe roda
+  versao anterior a CLI instalada.
+- Docker Desktop, Rancher Desktop e Finch passam a ser detectados.
+- Acao Enable/Disable Daemon do Podman no menu.
+- `--probe-runtimes` mostra a release do GitHub e o veredito de elevacao do vmnet.
+
+### Corrigido
+- Enable Daemon do vmnet: o AppleScript gerado nao compilava.
+- Lume: `brew services` recebia o label do launchd; o estado agora e o do
+  servidor `lume serve`, nao das VMs.
+- Upgrade da CLI nao detectado quando o primeiro `--version` falhava.
+- Podman aparecia ligado com qualquer maquina existente, ate parada.
+- Comandos longos podiam morrer no watchdog com stderr acima de 64KB.
+- Menu travava: o apply rodava `docker context show`/`ps -q` na main thread.
+- Polls se acumulavam sem limite com sondas travadas.
+- Erro de login persistia apos um registro bem-sucedido.
+- Clique de toggle podia inverter a acao exibida.
+- Tooltip dizia "CLI not found" com a CLI instalada mas sem responder.
+
+### Seguranca
+- CLI em `~/.local/bin` ou no PATH so e usada sem instalacao no sistema;
+  binario gravavel por grupo/outros e ignorado.
+- vmnet-cli so e elevado a root se o arquivo e o caminho forem do root.
+- Ids de container sem caracteres de controle no menu.
+- Watchdog confere se o filho vive antes do SIGKILL e nao espera sem prazo.
+
+### Removido
+- Codigo morto do app e restos de template do `package_app.sh`.

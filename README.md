@@ -107,10 +107,10 @@ Cobertura por metodo de instalacao: **.pkg do site** (instala em
 `/usr/local/bin`), **brew** (`/opt/homebrew/bin` no Apple Silicon,
 `/usr/local/bin` no Intel) e **build manual** (qualquer prefixo, contanto
 que o binario `container` esteja em um dos diretorios acima ou no PATH do
-usuario). Enquanto a CLI nao existe, o app mostra "Status: Nao instalado"
-com o link do projeto; assim que ela aparece em qualquer um desses
-lugares, o proximo poll (ate 3s) detecta e o menu passa a oferecer
-ligar/desligar - sem reiniciar o app.
+usuario). Enquanto a CLI nao existe, o ponto fica cinza e a acao do daemon
+some (o item GitHub continua levando ao projeto); assim que ela aparece em
+qualquer um desses lugares, o proximo poll (ate 3s) detecta e o menu passa
+a oferecer ligar/desligar - sem reiniciar o app.
 
 Quando existe **mais de uma copia** (por exemplo, .pkg antigo + brew
 novo), o app compara as versoes (`container --version`) e usa sempre a
