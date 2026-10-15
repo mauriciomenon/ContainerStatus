@@ -100,7 +100,10 @@ extension RuntimeControl {
 
 extension RuntimeProbeConfig {
     /// Ordem fixa de exibicao no menu; so aparece quem tiver binario.
-    static let standard: [RuntimeProbeConfig] = [.colima, .docker, .podman, .lume, .orbstack]
+    /// Inclui toda a familia docker: receita fora desta lista nunca e
+    /// sondada e o provider ficava escondido mesmo instalado.
+    static let standard: [RuntimeProbeConfig] =
+        [.colima, .docker, .podman, .lume, .orbstack, .dockerDesktop, .rancherDesktop, .finch]
 
     /// Providers do mesmo backbone docker: so entram no menu quando
     /// detectados. Cada um com toggle proprio quando e o dono do daemon.
@@ -175,11 +178,13 @@ extension RuntimeProbeConfig {
         )
     }
 
-    /// Docker Desktop: presenca pelo app; status pelo processo; toggle dele
-    /// mesmo, porque quando instalado E o dono do daemon docker.
+    /// Docker Desktop: presenca pelo app; status por qualquer processo
+    /// executando de dentro do bundle (pgrep -x compara so 16 caracteres do
+    /// nome e o executavel mudou de nome entre versoes); toggle dele mesmo,
+    /// porque quando instalado E o dono do daemon docker.
     static let dockerDesktop = RuntimeProbeConfig(
         label: "Docker Desktop", binaryName: "/usr/bin/pgrep",
-        statusArguments: ["-x", "Docker"],
+        statusArguments: ["-f", "^/Applications/Docker.app/Contents/MacOS/"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
         control: RuntimeControl(
             startBinary: "/usr/bin/open", startArguments: ["-a", "Docker"],
@@ -194,7 +199,7 @@ extension RuntimeProbeConfig {
     /// Rancher Desktop (SUSE): app + VM com daemon docker proprio.
     static let rancherDesktop = RuntimeProbeConfig(
         label: "Rancher Desktop", binaryName: "/usr/bin/pgrep",
-        statusArguments: ["-x", "Rancher Desktop"],
+        statusArguments: ["-f", "^/Applications/Rancher Desktop.app/Contents/MacOS/"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
         control: RuntimeControl(
             startBinary: "/usr/bin/open",
@@ -206,12 +211,16 @@ extension RuntimeProbeConfig {
         appBased: true
     )
 
-    /// Finch (AWS, base Lima): CLI rara; exibido como detectado, sem toggle
-    /// verificado (vm start/stop varia por versao).
+    /// Finch (AWS, base Lima): `finch vm status` imprime Running, Stopped ou
+    /// Nonexistent (cmd/finch/virtual_machine_status.go). Antes rodava
+    /// --version e mostrava sempre desligado.
     static let finch = RuntimeProbeConfig(
-        label: "Finch", binaryName: "finch", statusArguments: ["--version"],
-        interpret: { _ in .stopped },
-        nature: "CLI (base Lima)"
+        label: "Finch", binaryName: "finch", statusArguments: ["vm", "status"],
+        interpret: { $0.succeeded && ContainerCLI.firstLine($0.stdout) == "Running" ? .running : .stopped },
+        control: .selfBinary(binaryName: "finch",
+                             startArguments: ["vm", "start"], startTimeout: 180,
+                             stopArguments: ["vm", "stop"], stopTimeout: 120),
+        nature: "VM (base Lima)"
     )
 
     /// `orbctl status` responde "Running" exit 0 quando o OrbStack esta de pe.

@@ -477,6 +477,27 @@ enum SelfTest {
         expect(noCountProbe.runningCount() == nil,
                "runtime sem receita de contagem nao conta")
 
+        // Toda a familia docker precisa estar nas sondas de producao.
+        let probed = Set(RuntimeProbeConfig.standard.map(\.label))
+        expect(RuntimeProbeConfig.dockerFamily.allSatisfy { probed.contains($0.label) },
+               "familia docker inteira entra nas sondas padrao")
+
+        // Finch: vm status imprime Running / Stopped / Nonexistent.
+        let finchDirectory = temporary.appendingPathComponent("finch", isDirectory: true)
+        try FileManager.default.createDirectory(at: finchDirectory, withIntermediateDirectories: false)
+        _ = try stub("finch", finchDirectory, stdout: "Running", exitCode: 0)
+        expect(RuntimeProbe(config: .finch, directories: [finchDirectory.path])
+            .currentStatus().state == .running, "finch vm Running = ligado")
+        _ = try stub("finch", finchDirectory, stdout: "Nonexistent", exitCode: 0)
+        expect(RuntimeProbe(config: .finch, directories: [finchDirectory.path])
+            .currentStatus().state == .stopped, "finch sem VM = desligado")
+
+        // Docker Desktop e Rancher: processo de dentro do bundle, com o
+        // padrao ancorado no caminho (testado contra o pgrep real).
+        expect(ContainerCLI.runBinary("/usr/bin/pgrep", arguments: ["-f", "^/no/such/App.app/Contents/MacOS/"],
+                                      timeout: 2).exitCode == 1,
+               "pgrep ancorado sem processo = desligado")
+
         // OrbStack: orbctl status "Running" exit 0; erro = parado.
         let orbstackDirectory = temporary.appendingPathComponent("orbstack", isDirectory: true)
         try FileManager.default.createDirectory(at: orbstackDirectory, withIntermediateDirectories: false)
