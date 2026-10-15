@@ -180,6 +180,37 @@ enum SelfTest {
         expect(completed.wait(timeout: .now() + 3) == .success, "resolucao concorrente terminou")
         expect(concurrent.currentVersion() == "7.0.0", "probe antigo nao sobrescreve resolucao recente")
 
+        // Upgrade cuja primeira consulta de versao falha (binario novo lento
+        // na primeira execucao): o poll seguinte tem de consultar de novo,
+        // senao o app fica preso no binario e na versao antigos.
+        let flakyDirectory = temporary.appendingPathComponent("flaky", isDirectory: true)
+        try FileManager.default.createDirectory(at: flakyDirectory, withIntermediateDirectories: false)
+        let flakyOld = flakyDirectory.appendingPathComponent("old/container")
+        let flakyNew = flakyDirectory.appendingPathComponent("new/container")
+        for url in [flakyOld, flakyNew] {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: false)
+        }
+        try writeCLI(at: flakyOld, version: "1.0.0")
+        let flakyScript = """
+        #!/bin/sh
+        if [ "$1" = --version ]; then
+          if [ -f "$0.ready" ]; then printf 'container CLI version 9.0.0\\n'; else touch "$0.ready"; exit 1; fi
+        fi
+        """
+        try flakyScript.write(to: flakyNew, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: flakyNew.path)
+        let flaky = ContainerCLI(directories: [flakyOld.deletingLastPathComponent().path,
+                                               flakyNew.deletingLastPathComponent().path])
+        _ = flaky.checkStatus()
+        expect(flaky.currentVersion() == "1.0.0", "probe falho do candidato novo cai no antigo")
+        _ = flaky.checkStatus()
+        expect(flaky.currentBinaryPath() == flakyNew.path && flaky.currentVersion() == "9.0.0",
+               "probe falho e repetido no poll seguinte e o upgrade aparece")
+        _ = flaky.checkStatus()
+        expect(try probeCount(for: flakyOld) == 2,
+               "com todos os probes ok o cache volta a valer")
+
         try FileManager.default.removeItem(at: oldCLI)
         _ = cli.checkStatus()
         expect(cli.currentBinaryPath() == newCLI.path, "remocao seleciona candidato restante")

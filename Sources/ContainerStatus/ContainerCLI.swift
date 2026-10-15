@@ -53,9 +53,13 @@ final class ContainerCLI: Sendable {
         }
     }
 
+    /// Prazo do `--version`: so roda quando o binario muda, e a primeira
+    /// execucao de um binario novo passa pela verificacao do Gatekeeper.
+    private static let versionTimeout: TimeInterval = 5
+
     /// CLI version of one candidate, or nil when it does not answer with one.
     static func probeVersion(_ path: String) -> String? {
-        parseVersion(runBinary(path, arguments: ["--version"], timeout: statusTimeout).stdout)
+        parseVersion(runBinary(path, arguments: ["--version"], timeout: versionTimeout).stdout)
     }
 
     /// Strict semver-ish comparison ("1.4.1" > "1.3.1", "10.0" > "9.9.9");
@@ -103,16 +107,25 @@ final class ContainerCLI: Sendable {
     /// Picks the newest candidate by version; ties keep the priority order of
     /// the directory list.
     static func resolveNewest(existingCandidates candidates: [String]) -> ResolvedCLI? {
-        guard var best = candidates.first else { return nil }
+        resolveNewestReportingFailures(candidates).resolved
+    }
+
+    /// Como resolveNewest, informando se algum candidato ficou sem versao:
+    /// essa resolucao e provisoria e nao pode ser cacheada.
+    private static func resolveNewestReportingFailures(_ candidates: [String])
+        -> (resolved: ResolvedCLI?, complete: Bool) {
+        guard var best = candidates.first else { return (nil, true) }
         var bestVersion = probeVersion(best)
+        var complete = bestVersion != nil
         for candidate in candidates.dropFirst() {
             let version = probeVersion(candidate)
+            if version == nil { complete = false }
             if isVersionNewer(version, than: bestVersion) {
                 best = candidate
                 bestVersion = version
             }
         }
-        return ResolvedCLI(path: best, version: bestVersion, pathInfo: makePathInfo(best))
+        return (ResolvedCLI(path: best, version: bestVersion, pathInfo: makePathInfo(best)), complete)
     }
 
     /// "path", ou "resolved destination via path" when the candidate is a
@@ -281,16 +294,21 @@ final class ContainerCLI: Sendable {
     }
 
     /// Consulta metadados a cada poll; executa --version somente apos mudancas.
+    /// Resolucao com probe falho publica o resultado mas nao grava as
+    /// assinaturas: o poll seguinte tenta de novo. Cachear o nil prendia o
+    /// app no binario e na versao antigos ate um novo upgrade ou o ⟳.
+    // ponytail: candidato que nunca responde versao e re-consultado a cada
+    // poll (um --version de ~10ms); backoff so se isso aparecer de verdade.
     private func refreshBinaryPathIfNeeded() {
         let current = pathLock.withLock { $0 }
         let signatures = candidateSignatures()
         if current.signatures == signatures { return }
-        let resolved = Self.resolveNewest(existingCandidates: signatures.map(\.path))
+        let (resolved, complete) = Self.resolveNewestReportingFailures(signatures.map(\.path))
         guard candidateSignatures() == signatures else { return }
         pathLock.withLock { state in
             guard state.revision == current.revision else { return }
             state.resolved = resolved
-            state.signatures = signatures
+            state.signatures = complete ? signatures : nil
             state.revision += 1
         }
     }
