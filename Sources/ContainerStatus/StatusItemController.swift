@@ -764,7 +764,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         vmnetState = state
         self.vmCount = vmCount
         // Cancelar o dialogo de senha nao e falha: sai silencioso.
-        let canceled = result.exitCode == 2 || result.stderr.contains("User canceled")
+        let canceled = result.stderr.contains("(-128)")  // osascript: exit 1, erro -128
         if result.succeeded || canceled {
             detail = nil
             detailIsLocal = false
@@ -1024,7 +1024,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // Cancelar dialogo do vmnet nao e falha.
         toggleController.finishVmnet(
-            result: CLIRunResult(exitCode: 2, spawned: true, stderr: "User canceled. (-128)"),
+            result: CLIRunResult(exitCode: 1, spawned: true, stderr: "execution error: User canceled. (-128)"),
             state: .running, vmCount: 1)
         expect(toggleController.errorItem.menu == nil,
                "cancelar vmnet sai sem linha de erro")

@@ -413,8 +413,16 @@ enum SelfTest {
 
         let script = running.startScript()
         expect(script.contains("vmnet-cli") && script.contains("with administrator privileges")
-               && script.contains("--start"),
-               "script de subida pede admin e sobe")
+               && script.contains("--start")
+               && script.contains("/usr/bin/codesign --verify") && script.contains(VmnetProbe.vmwareTeamID),
+               "script de subida confere a assinatura VMware como root antes de subir")
+        let realCli = "/Applications/VMware Fusion.app/Contents/Library/vmnet-cli"
+        if FileManager.default.fileExists(atPath: realCli) {
+            let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(VmnetProbe.vmwareTeamID)\""
+            expect(ContainerCLI.runBinary("/usr/bin/codesign", arguments: ["--verify", "-R=\(requirement)", realCli],
+                                          timeout: 10).succeeded,
+                   "vmnet-cli instalado passa no requisito de assinatura")
+        }
         // Compila sem executar: aspas cruas no literal quebravam a sintaxe.
         let compiled = temporary.appendingPathComponent("vmnet.scpt").path
         expect(ContainerCLI.runBinary("/usr/bin/osacompile", arguments: ["-o", compiled, "-e", script],
@@ -494,6 +502,17 @@ enum SelfTest {
                  stdout: "[{\"Name\":\"Running\",\"Running\":false}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped, "maquina chamada Running nao engana o estado")
+        _ = try stub("podman", podmanDirectory,
+                     stdout: "[{\"Name\":\"dev\",\"Default\":false,\"Running\":true},"
+                        + "{\"Name\":\"pm\",\"Default\":true,\"Running\":false}]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .stopped,
+               "podman segue a maquina padrao, a mesma que start/stop controlam")
+        let writablePodman = try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: writablePodman)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path]).resolvedPath() == nil,
+               "sonda ignora binario gravavel por outros usuarios")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: writablePodman)
         _ = try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped, "podman sem maquina = desligado")

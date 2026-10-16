@@ -153,7 +153,12 @@ extension RuntimeProbeConfig {
         guard result.succeeded,
               let machines = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [[String: Any]]
         else { return .stopped }
-        return machines.contains { $0["Running"] as? Bool == true } ? .running : .stopped
+        // `machine start/stop` sem nome age na maquina padrao: o estado tem
+        // de ser o dela, senao uma VM "dev" ligada mostraria Disable Daemon
+        // que nao a desliga. Sem a chave Default (versao antiga), vale qualquer.
+        let hasDefault = machines.contains { $0["Default"] != nil }
+        let watched = hasDefault ? machines.filter { $0["Default"] as? Bool == true } : machines
+        return watched.contains { $0["Running"] as? Bool == true } ? .running : .stopped
     }
 
     /// O toggle controla o servidor `lume serve` (servico brew), entao o
@@ -296,9 +301,17 @@ final class VmnetProbe: Sendable {
     /// Duas camadas de escape: o caminho vai entre aspas simples para o
     /// shell, e o comando inteiro vira literal AppleScript. Aspas duplas
     /// cruas dentro do literal quebravam a compilacao do script.
+    /// Team ID da VMware (codesign -dv do vmnet-cli instalado).
+    static let vmwareTeamID = "EG7KH642X6"
+
+    /// O shell ja root confere a assinatura da VMware antes de executar:
+    /// /Applications e gravavel pelo grupo admin, entao o bundle poderia ser
+    /// trocado durante o dialogo de senha, depois da checagem do app.
     func startScript() -> String {
         let quoted = "'" + vmnetCliPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        let shell = "\(quoted) --stop >/dev/null 2>&1; \(quoted) --start"
+        let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(Self.vmwareTeamID)\""
+        let verify = "/usr/bin/codesign --verify -R='\(requirement)' \(quoted) || exit 1"
+        let shell = "\(verify); \(quoted) --stop >/dev/null 2>&1; \(quoted) --start"
         let literal = shell.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "do shell script \"\(literal)\" with administrator privileges"
@@ -368,7 +381,7 @@ final class RuntimeProbe: Sendable {
         return directories.compactMap { directory in
             let candidate = URL(fileURLWithPath: directory)
                 .appendingPathComponent(config.binaryName).path
-            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+            return ContainerCLI.isTrustedExecutable(candidate) ? candidate : nil
         }.first
     }
 
@@ -395,7 +408,7 @@ final class RuntimeProbe: Sendable {
         }
         return directories.compactMap { directory in
             let candidate = URL(fileURLWithPath: directory).appendingPathComponent(name).path
-            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+            return ContainerCLI.isTrustedExecutable(candidate) ? candidate : nil
         }.first
     }
 
