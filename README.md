@@ -44,7 +44,7 @@ About                      Quit
 - **Sobre ContainerStatus**: painel centralizado com autor, commit-base do
   build, link do repositorio, data de build ISO e GPL 2.0 na ultima linha.
 - Deteccao por polling da CLI oficial `container system status` (codigo de
-  saida) a cada 3s, com watchdog de 2s. Start e stop tem watchdog de 40s
+  saida) a cada 15s com o menu fechado e 3s com ele aberto, com watchdog de 2s. Start e stop tem watchdog de 40s
   (pior caso oficial: instalacao de kernel no start e parada de containers
   no stop). O fallback `--disable-kernel-install` roda so apos falha
   explicita do start puro, nunca apos timeout (o bootstrap pode continuar
@@ -81,7 +81,7 @@ cada checagem enquanto nao for encontrado, sem restart):
 
 | Comando | Quando | Watchdog |
 |---|---|---|
-| `container system status` | poll a cada 3s e ao abrir o menu | 2s |
+| `container system status` | poll a cada 15s (3s com o menu aberto) e ao abrir o menu | 2s |
 | `container system start` | acao "Ligar daemon" | 40s |
 | `container system start --disable-kernel-install` | so se o start puro falhar com erro explicito | 40s |
 | `container system stop` | acao "Desligar daemon" | 40s |

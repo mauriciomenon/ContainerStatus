@@ -547,7 +547,20 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     // MARK: Polling
 
-    private func startPolling(every interval: TimeInterval = 3) {
+    /// Menu fechado so alimenta o ponto da barra: 15s bastam e cortam ~5x os
+    /// processos curtos de cada ciclo. Menu aberto volta a 3s.
+    static let idlePollInterval: TimeInterval = 15
+    static let openPollInterval: TimeInterval = 3
+    private(set) var pollInterval: TimeInterval = 0
+
+    func menuWillOpen(_ menu: NSMenu) { startPolling(every: Self.openPollInterval) }
+    func menuDidClose(_ menu: NSMenu) { startPolling(every: Self.idlePollInterval) }
+
+    /// Reagenda o timer unico (cancela o anterior: nunca dois timers vivos).
+    private func startPolling(every interval: TimeInterval = StatusItemController.idlePollInterval) {
+        guard interval != pollInterval || pollTimer == nil else { return }
+        pollTimer?.cancel()
+        pollInterval = interval
         let timer = DispatchSource.makeTimerSource(queue: pollQueue)
         timer.schedule(deadline: .now() + interval, repeating: interval)
         timer.setEventHandler { @Sendable [weak self] in
@@ -1180,6 +1193,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "lume detectado oferece habilitar o daemon")
 
         // Poll em voo: um segundo pedido no meio e descartado, nao enfileirado.
+        // Cadencia: 15s com menu fechado, 3s aberto, um unico timer.
+        lumeController.startPolling()
+        expect(lumeController.pollInterval == StatusItemController.idlePollInterval, "menu fechado consulta a cada 15s")
+        let firstTimer = lumeController.pollTimer
+        lumeController.menuWillOpen(lumeController.menu)
+        expect(lumeController.pollInterval == StatusItemController.openPollInterval
+               && firstTimer?.isCancelled == true,
+               "menu aberto consulta a cada 3s e cancela o timer anterior")
+        lumeController.menuDidClose(lumeController.menu)
+        expect(lumeController.pollInterval == StatusItemController.idlePollInterval, "fechar o menu volta a 15s")
+        lumeController.pollTimer?.cancel()
+        lumeController.pollTimer = nil
+
         // Pedidos no meio de um ciclo viram UM ciclo extra (rescan nao some),
         // nunca uma fila.
         lumeController.lastAppliedSequence = -1
