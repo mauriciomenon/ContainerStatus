@@ -179,6 +179,12 @@ if (( HAVE_LOCK == 0 )); then
   echo "ERROR: another packaging holds $LOCK_DIR (remove it if stale)" >&2
   exit 1
 fi
+# Backup sobrando com o destino ausente = execucao anterior interrompida no
+# meio da troca: ele e a unica copia boa, entao volta ao lugar antes de
+# tudo. Com o destino presente, o backup e resto de uma troca concluida.
+if [[ -e "$BACKUP" && ! -e "$FINAL_APP" ]]; then
+  mv "$BACKUP" "$FINAL_APP"
+fi
 rm -rf "$BACKUP"
 if [[ -e "$FINAL_APP" ]]; then
   mv "$FINAL_APP" "$BACKUP"

@@ -37,6 +37,9 @@ struct CLIRunResult: Sendable {
     /// Saida cortada no teto de captura: JSON ou tabela incompletos nao
     /// podem ser lidos como resposta valida.
     var truncated: Bool = false
+    /// Morreu por sinal (terminationReason .uncaughtSignal), nao por exit:
+    /// nao e falha explicita da CLI, o bootstrap pode seguir no launchd.
+    var signaled: Bool = false
 
     /// O processo terminou com exit 0 dentro do prazo. Vale para mutacoes
     /// (start/stop/toggle): saida grande ou incompleta nao desfaz um start.

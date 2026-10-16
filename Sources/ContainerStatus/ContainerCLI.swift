@@ -285,7 +285,7 @@ final class ContainerCLI: Sendable {
         // Fallback so apos falha EXPLICITA (exit != 0): exit 0 com saida
         // truncada ou pipe preso ja e start feito, e timeout deixa o
         // bootstrap em andamento.
-        guard plain.spawned, !plain.timedOut, plain.exitCode != 0 else { return plain }
+        guard plain.spawned, !plain.timedOut, !plain.signaled, plain.exitCode != 0 else { return plain }
         let fallback = run(["system", "start", "--disable-kernel-install"], timeout: Self.mutationTimeout)
         return fallback.exitedCleanly ? fallback : plain
     }
@@ -501,11 +501,12 @@ final class ContainerCLI: Sendable {
             // para parsers (stdout vazio viraria "0 containers").
             return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
                                 stderr: "saida nao disponivel: pipe mantido aberto por processo filho",
-                                truncated: true)
+                                truncated: true, signaled: process.terminationReason == .uncaughtSignal)
         }
         return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
                             stderr: stderrBox.text, stdout: stdoutBox.text,
-                            truncated: stdoutBox.truncated || stderrBox.truncated)
+                            truncated: stdoutBox.truncated || stderrBox.truncated,
+                            signaled: process.terminationReason == .uncaughtSignal)
     }
 
     static func parseVersion(_ text: String) -> String? {

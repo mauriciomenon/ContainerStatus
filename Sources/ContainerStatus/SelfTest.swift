@@ -339,6 +339,19 @@ enum SelfTest {
         _ = starter.start()
         let startsAfterFailure = try probeCount(for: startCLI, suffix: ".starts")
         expect(startsAfterFailure == 2, "start com exit 1 dispara o fallback")
+        // Morte por sinal nao e falha explicita: nada de segundo start.
+        let signalScript = """
+        #!/bin/sh
+        if [ "$1" = system ] && [ "$2" = start ]; then
+          printf 's\\n' >> "$0.starts"
+          kill -TERM $$
+        fi
+        """
+        try signalScript.write(to: startCLI, atomically: false, encoding: .utf8)
+        try? FileManager.default.removeItem(atPath: startCLI.path + ".starts")
+        let killedStart = starter.start()
+        let startsAfterSignal = try probeCount(for: startCLI, suffix: ".starts")
+        expect(killedStart.signaled && startsAfterSignal == 1, "start morto por sinal nao dispara o fallback")
 
         // Versao do servico (apiserver) x CLI: tabela de system version.
         let table = """
