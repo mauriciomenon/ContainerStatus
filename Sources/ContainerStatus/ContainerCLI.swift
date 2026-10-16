@@ -62,12 +62,17 @@ final class ContainerCLI: Sendable {
     static func existingCandidates(inDirectories directories: [String] = ContainerCLI.systemDirectories) -> [String] {
         directories.compactMap { directory in
             let candidate = URL(fileURLWithPath: directory).appendingPathComponent("container").path
-            var metadata = stat()
-            guard FileManager.default.isExecutableFile(atPath: candidate),
-                  stat(candidate, &metadata) == 0,
-                  metadata.st_mode & (S_IWGRP | S_IWOTH) == 0 else { return nil }
-            return candidate
+            return isTrustedExecutable(candidate) ? candidate : nil
         }
+    }
+
+    /// Executavel que o app aceita rodar: nao gravavel por grupo/outros
+    /// (stat segue o symlink ate o destino). Vale para a CLI e as sondas.
+    static func isTrustedExecutable(_ path: String) -> Bool {
+        var metadata = stat()
+        return FileManager.default.isExecutableFile(atPath: path)
+            && stat(path, &metadata) == 0
+            && metadata.st_mode & (S_IWGRP | S_IWOTH) == 0
     }
 
     /// Prazo do `--version`: so roda quando o binario muda, e a primeira
@@ -75,8 +80,11 @@ final class ContainerCLI: Sendable {
     private static let versionTimeout: TimeInterval = 5
 
     /// CLI version of one candidate, or nil when it does not answer with one.
+    /// Exit diferente de zero nao conta, mesmo com versao no stdout: o
+    /// resultado iria para o cache como resolucao completa.
     static func probeVersion(_ path: String) -> String? {
-        parseVersion(runBinary(path, arguments: ["--version"], timeout: versionTimeout).stdout)
+        let result = runBinary(path, arguments: ["--version"], timeout: versionTimeout)
+        return result.succeeded ? parseVersion(result.stdout) : nil
     }
 
     /// Strict semver-ish comparison ("1.4.1" > "1.3.1", "10.0" > "9.9.9");
@@ -188,20 +196,26 @@ final class ContainerCLI: Sendable {
     /// Consulta o servico so quando preciso: CLI trocou, start/stop do app,
     /// ou versoes ainda divergem (restart feito pelo terminal aparece no
     /// poll seguinte). Com tudo igual, nenhum processo extra por poll.
-    func refreshServiceVersion(running: Bool) {
+    func refreshServiceVersion(running: Bool, now: Date = Date()) {
         guard running else {
             serviceLock.withLock { $0 = nil }
             return
         }
         let (revision, cliVersion) = pathLock.withLock { ($0.revision, $0.resolved?.version) }
         let cached = serviceLock.withLock { $0 }
-        // nil = CLI sem `system version` ou saida sem apiserver: nao insiste.
-        if let cached, cached.revision == revision,
-           cached.version == nil || cached.version == cliVersion { return }
+        if let cached, cached.revision == revision {
+            if cached.version == cliVersion { return }
+            // Sem versao (falha transitoria, CLI sem o verbo ou saida sem o
+            // apiserver): tenta de novo com folga, nunca desiste de vez.
+            if cached.version == nil,
+               now.timeIntervalSince(cached.checkedAt) < Self.serviceRetryInterval { return }
+        }
         let result = run(["system", "version"], timeout: Self.statusTimeout)
         let version = result.succeeded ? Self.parseServiceVersion(result.stdout) : nil
-        serviceLock.withLock { $0 = (revision, version) }
+        serviceLock.withLock { $0 = (revision, version, now) }
     }
+
+    static let serviceRetryInterval: TimeInterval = 30
 
     /// Human-readable install info, served from the resolution cache (the
     /// symlink walk happens on the background queue, at resolution time).
@@ -213,7 +227,8 @@ final class ContainerCLI: Sendable {
     /// picked up without restarting the app.
     private let pathLock: OSAllocatedUnfairLock<ResolutionState>
     /// Versao do apiserver e a revisao da resolucao em que foi lida.
-    private let serviceLock = OSAllocatedUnfairLock<(revision: UInt64, version: String?)?>(initialState: nil)
+    private let serviceLock =
+        OSAllocatedUnfairLock<(revision: UInt64, version: String?, checkedAt: Date)?>(initialState: nil)
     private let directories: [String]
     private let fallbackDirectories: [String]
     private let environment: [String: String]
@@ -311,7 +326,7 @@ final class ContainerCLI: Sendable {
         let flat = String(text.unicodeScalars.map {
             CharacterSet.controlCharacters.contains($0) ? " " : Character($0)
         })
-        return flat.count > limit ? String(flat.prefix(limit - 3)) + "..." : flat
+        return flat.count > limit ? String(flat.prefix(max(0, limit - 3))) + "..." : flat
     }
 
     // MARK: Process plumbing
@@ -397,32 +412,47 @@ final class ContainerCLI: Sendable {
             return CLIRunResult(stderr: error.localizedDescription)
         }
 
-        // Os pipes sao lidos em paralelo a execucao: ler so depois da saida
-        // travaria o filho se a saida exceder o buffer do pipe (64KB).
-        // As Data morrem num box sob lock: o bloqueio de saida fica no
-        // thread de leitura e o compilador enxerga o acesso protegido.
+        // Os pipes sao drenados durante a execucao (ler so no fim travaria um
+        // filho com mais de 64KB de saida), cada um por readabilityHandler:
+        // nada fica bloqueado em read(), entao um neto segurando o pipe nao
+        // prende threads, e cancelar e so tirar o handler. Teto de 1MB por
+        // stream: os parsers so usam o comeco da saida.
         final class IOBox: @unchecked Sendable {
+            static let cap = 1 << 20
             private let lock = NSLock()
             private var storage = Data()
-            func set(_ data: Data) { lock.withLock { storage = data } }
+            private var finished = false
+            let done = DispatchSemaphore(value: 0)
+            func append(_ chunk: Data) {
+                lock.withLock {
+                    if storage.count < Self.cap { storage.append(chunk.prefix(Self.cap - storage.count)) }
+                }
+            }
+            /// EOF: sinaliza uma unica vez.
+            func finish() {
+                let first = lock.withLock { () -> Bool in
+                    defer { finished = true }
+                    return !finished
+                }
+                if first { done.signal() }
+            }
             func get() -> Data { lock.withLock { storage } }
+        }
+        func drain(_ handle: FileHandle, into box: IOBox) {
+            handle.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                if chunk.isEmpty {
+                    handle.readabilityHandler = nil
+                    box.finish()
+                } else {
+                    box.append(chunk)
+                }
+            }
         }
         let stdoutBox = IOBox()
         let stderrBox = IOBox()
-        // Fila concorrente: numa serial a leitura do stderr so comecava apos
-        // EOF do stdout, e um filho com stderr cheio travava no write.
-        let ioQueue = DispatchQueue.global(qos: .utility)
-        let ioGroup = DispatchGroup()
-        ioGroup.enter()
-        ioQueue.async {
-            stdoutBox.set(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
-            ioGroup.leave()
-        }
-        ioGroup.enter()
-        ioQueue.async {
-            stderrBox.set(stderrPipe.fileHandleForReading.readDataToEndOfFile())
-            ioGroup.leave()
-        }
+        drain(stdoutPipe.fileHandleForReading, into: stdoutBox)
+        drain(stderrPipe.fileHandleForReading, into: stderrBox)
 
         var timedOut = false
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
@@ -430,19 +460,28 @@ final class ContainerCLI: Sendable {
             process.terminate()
             if semaphore.wait(timeout: .now() + 1.5) == .timedOut {
                 // isRunning antes do kill: um pid ja colhido pode ter sido
-                // reciclado por outro processo. Espera com teto: filho preso
-                // no kernel nao pode congelar o pollQueue para sempre.
+                // reciclado. Resta uma janela entre o teste e o kill sem
+                // pidfd no macOS; e minima porque o pid fica zumbi ate a
+                // Foundation colhe-lo e o kernel aloca pids em sequencia.
+                // Espera com teto: filho preso no kernel nao congela o poll.
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
                 if semaphore.wait(timeout: .now() + 2) == .timedOut {
+                    stdoutPipe.fileHandleForReading.readabilityHandler = nil
+                    stderrPipe.fileHandleForReading.readabilityHandler = nil
                     return CLIRunResult(timedOut: true, spawned: true,
                                         stderr: "processo nao terminou apos SIGKILL")
                 }
             }
         }
-        // Teto para o caso de um processo neto segurar o pipe aberto. Se
-        // expirar, o box ainda pode receber escrita do ioQueue: nao ler as
-        // Data evita esperar no lock e devolve saida vazia de proposito.
-        let ioCompleted = ioGroup.wait(timeout: .now() + 2) == .success
+        // Teto para um neto segurando o pipe: sem EOF em 2s, os handlers saem
+        // e os descritores fecham junto com os Pipe ao fim desta funcao.
+        let ioDeadline = DispatchTime.now() + 2
+        let ioCompleted = stdoutBox.done.wait(timeout: ioDeadline) == .success
+            && stderrBox.done.wait(timeout: ioDeadline) == .success
+        if !ioCompleted {
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+        }
 
         if timedOut {
             return CLIRunResult(exitCode: process.terminationStatus, timedOut: true, spawned: true,

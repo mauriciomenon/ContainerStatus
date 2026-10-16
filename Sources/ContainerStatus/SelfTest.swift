@@ -95,7 +95,18 @@ enum SelfTest {
         expect(hung.timedOut && !hung.succeeded, "watchdog mata processo estourado")
         let stubborn = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "trap '' TERM; while :; do :; done"],
                                               timeout: 0.3)
-        expect(stubborn.timedOut && !stubborn.succeeded, "filho que ignora SIGTERM cai no SIGKILL")
+        expect(stubborn.timedOut && !stubborn.succeeded && stubborn.exitCode == SIGKILL,
+               "filho que ignora SIGTERM morre de fato pelo SIGKILL")
+        // Neto segurando o pipe: retorna no teto de IO sem prender threads e
+        // sem perder o exit do filho; a saida e dada como indisponivel.
+        let heldStart = Date()
+        let held = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "/bin/sleep 4 & echo ok"], timeout: 2)
+        expect(!held.timedOut && held.exitCode == 0 && held.stderr.contains("pipe mantido aberto")
+               && Date().timeIntervalSince(heldStart) < 3.5,
+               "neto segurando o pipe nao trava a chamada")
+        let flood = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "head -c 3000000 /dev/zero | tr '\\0' y"],
+                                           timeout: 5)
+        expect(flood.succeeded && flood.stdout.utf8.count == 1 << 20, "saida acima de 1MB e truncada no teto")
         // stderr acima do buffer do pipe (64KB) com stdout ainda aberto: com
         // leitura serial o filho travava no write ate o watchdog.
         let noisy = ContainerCLI.runBinary("/bin/sh",
@@ -306,6 +317,24 @@ enum SelfTest {
         expect(service.currentServiceVersion() == "1.5.0", "servico antigo de pe apos upgrade da CLI")
         service.refreshServiceVersion(running: false)
         expect(service.currentServiceVersion() == nil, "servico parado limpa a versao")
+        // Falha transitoria do system version: tenta de novo apos o intervalo.
+        let start = Date()
+        try writeServiceCLI(apiserver: "x")
+        service.refreshServiceVersion(running: true, now: start)
+        expect(service.currentServiceVersion() == nil, "system version sem versao valida = nil")
+        try writeServiceCLI(apiserver: "1.5.0")
+        service.refreshServiceVersion(running: true, now: start.addingTimeInterval(1))
+        expect(service.currentServiceVersion() == nil, "falha recente nao repete a cada poll")
+        service.refreshServiceVersion(running: true,
+                                      now: start.addingTimeInterval(ContainerCLI.serviceRetryInterval + 1))
+        expect(service.currentServiceVersion() == "1.5.0", "falha antiga e consultada de novo")
+
+        // --version com exit != 0 nao conta como versao, mesmo com stdout.
+        let failingVersion = serviceDirectory.appendingPathComponent("failing")
+        try "#!/bin/sh\nprintf 'container CLI version 9.0.0\\n'\nexit 1\n"
+            .write(to: failingVersion, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: failingVersion.path)
+        expect(ContainerCLI.probeVersion(failingVersion.path) == nil, "--version com exit 1 e ignorado")
 
         // Contagem de containers rodando (ls --format json): parse do array,
         // vazio = 0, falha = nil.
