@@ -74,8 +74,12 @@ enum SelfTest {
                "release do GitHub: prefixo v removido")
         expect(release("{\"tag_name\":\"1.6.0-rc1\",\"html_url\":\"\(link)\"}") == nil,
                "release do GitHub: tag nao numerica ignorada")
-        expect(release("{\"tag_name\":\"1.6.0\",\"html_url\":\"https://evil.example/x\"}") == nil,
-               "release do GitHub: link fora de github.com ignorado")
+        expect(release("{\"tag_name\":\"1.6.0\",\"html_url\":\"https://github.com/attacker/x/releases/download/evil.dmg\"}")?
+                .url.absoluteString == "https://github.com/apple/container/releases/tag/1.6.0",
+               "release do GitHub: URL montada pelo app, html_url da resposta ignorado")
+        expect(release("{\"tag_name\":\"1.2.3.4.5\"}") == nil
+               && release("{\"tag_name\":\"\(String(repeating: "1.", count: 20))1\"}") == nil,
+               "release do GitHub: tag longa ou com mais de 4 partes ignorada")
         expect(release("{\"message\":\"API rate limit exceeded\"}") == nil && release("lixo") == nil,
                "release do GitHub: resposta de erro = nil")
         let latest = release("{\"tag_name\":\"1.6.0\",\"html_url\":\"\(link)\"}")
@@ -97,6 +101,15 @@ enum SelfTest {
                                               timeout: 0.3)
         expect(stubborn.timedOut && !stubborn.succeeded && stubborn.exitCode == SIGKILL,
                "filho que ignora SIGTERM morre de fato pelo SIGKILL")
+        // CLI que trava num subprocesso: o timeout leva a arvore toda, o neto
+        // nao sobrevive ao pai (antes ficava um por ciclo de poll).
+        let treeMarker = "cs_tree_\(UUID().uuidString.prefix(8))"
+        let tree = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "/bin/sleep 30 \(treeMarker) 2>/dev/null & /bin/sleep 30"],
+                                          timeout: 0.5)
+        Thread.sleep(forTimeInterval: 0.3)
+        let survivor = ContainerCLI.runBinary("/usr/bin/pgrep", arguments: ["-f", treeMarker], timeout: 2)
+        expect(tree.timedOut && survivor.exitCode == 1, "timeout encerra tambem os descendentes do CLI")
+
         // Neto segurando o pipe: retorna no teto de IO sem prender threads e
         // sem perder o exit do filho; a saida e dada como indisponivel.
         let heldStart = Date()
@@ -485,6 +498,8 @@ enum SelfTest {
                && script.contains("--start")
                && script.contains("/usr/bin/codesign --verify") && script.contains(VmnetProbe.vmwareTeamID),
                "script de subida confere a assinatura VMware como root antes de subir")
+        expect(script.components(separatedBy: "/usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin ./vmnet-cli").count == 3,
+               "vmnet-cli roda como root com ambiente zerado (sem HOME/PATH do usuario) no stop e no start")
         // Verificacao do shell elevado, rodada sem root: stub do usuario cai;
         // o Fusion real (root:wheel, assinado pela VMware) passa.
         let stubCheck = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", running.verificationShell() + "; echo OK"],
@@ -495,7 +510,7 @@ enum SelfTest {
             let realCheck = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", VmnetProbe().verificationShell() + "; echo OK"],
                                                    timeout: 10)
             expect(realCheck.stdout == "OK", "shell elevado aceita o vmnet-cli real da VMware")
-            let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(VmnetProbe.vmwareTeamID)\""
+            let requirement = VmnetProbe.vmwareRequirement
             expect(ContainerCLI.runBinary("/usr/bin/codesign", arguments: ["--verify", "-R=\(requirement)", realCli],
                                           timeout: 10).succeeded,
                    "vmnet-cli instalado passa no requisito de assinatura")

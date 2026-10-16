@@ -158,7 +158,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     init(cli: ContainerCLI = ContainerCLI.installed(),
          runtimes: [RuntimeProbe] = RuntimeProbeConfig.standard.map { RuntimeProbe(config: $0) },
-         vmnet: VmnetProbe = VmnetProbe()) {
+         vmnet: VmnetProbe = VmnetProbe(), persistPosition: Bool = false) {
         self.cli = cli
         self.runtimes = runtimes
         self.vmnet = vmnet
@@ -168,7 +168,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // Nome estavel: sem ele cada versao virava um "Item-N" novo no
         // defaults, a posicao arrastada pelo usuario se perdia e o ponto
         // podia nascer na borda direita, depois do relogio.
-        if Bundle.main.bundleIdentifier != nil { item.autosaveName = "ContainerStatusDot" }
+        // So a execucao normal: testes e --dump-menu escondem o item, e com o
+        // nome persistente o AppKit gravaria essa invisibilidade para o app.
+        if persistPosition {
+            item.autosaveName = "ContainerStatusDot"
+            item.isVisible = true  // recupera visibilidade gravada por build antigo
+        }
         item.menu = menu
         item.button?.image = Self.dotImage(state: state, dimmed: false)
     }
@@ -180,11 +185,20 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let controller = StatusItemController()
         controller.item.isVisible = false
         controller.refreshNow()
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline && controller.lastAppliedSequence < 1 {
+        // Espera o ciclo terminar de fato (pollInFlight zera so depois de
+        // todas as CLIs do ciclo voltarem): sair antes deixaria filhos sem
+        // watchdog. Prazo cobre o pior caso serial das sondas.
+        let deadline = Date().addingTimeInterval(90)
+        while Date() < deadline && (controller.lastAppliedSequence < 1 || controller.pollInFlight) {
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         }
-        controller.menuNeedsUpdate(controller.menu)
+        guard controller.lastAppliedSequence >= 1, !controller.pollInFlight else {
+            print("ERRO: o poll nao terminou no prazo; menu nao impresso")
+            exit(1)
+        }
+        // Sem menuNeedsUpdate: ele dispararia outro poll antes do exit.
+        controller.fitMenuWidth()
+        controller.apply()
         for item in controller.menu.items {
             if item.isSeparatorItem { print("-----"); continue }
             let text = item.view != nil ? "[view \(Int(item.view?.frame.width ?? 0))pt]" : item.title
@@ -204,6 +218,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Reabrir o app ja em execucao (Finder, Spotlight, `open`) nao mostrava
     /// nada: sem janela nem Dock, parecia que "nao abriu". Agora abre o menu.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        item.isVisible = true
         item.button?.performClick(nil)
         return false
     }
@@ -319,9 +334,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if let pathDisplay {
             // Long symlink chains break in two: resolved path on top,
             // "via <symlink>" underneath.
-            let rendered = pathDisplay.count > 40 && pathDisplay.contains(" via ")
-                ? pathDisplay.replacingOccurrences(of: " via ", with: "\nvia ")
-                : pathDisplay
+            let safePath = ContainerCLI.menuSafe(pathDisplay, limit: 200)  // nomes de symlink sao do usuario
+            let rendered = safePath.count > 40 && safePath.contains(" via ")
+                ? safePath.replacingOccurrences(of: " via ", with: "\nvia ")
+                : safePath
             pathItem.attributedTitle = NSAttributedString(string: rendered, attributes: [
                 .font: NSFont.menuFont(ofSize: 10),
                 .foregroundColor: NSColor.secondaryLabelColor,

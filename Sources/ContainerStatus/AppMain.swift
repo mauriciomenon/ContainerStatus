@@ -29,7 +29,7 @@ struct AppMain {
         MainActor.assumeIsolated {
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
-            let controller = StatusItemController()
+            let controller = StatusItemController(persistPosition: true)
             app.delegate = controller
             app.run()
         }

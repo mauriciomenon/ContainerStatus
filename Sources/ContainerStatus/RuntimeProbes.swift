@@ -303,7 +303,7 @@ final class VmnetProbe: Sendable {
         // -x (nome exato): -f casaria qualquer processo com "vmnet" nos
         // argumentos (grep, tail de log) e mentiria "Ativo" com a rede caida.
         let daemons = ContainerCLI.runBinary(pgrepPath,
-                                             arguments: ["-x", "vmnet-(natd|dhcpd|bridge)"],
+                                             arguments: ["-U", "0", "-x", "vmnet-(natd|dhcpd|bridge)"],  // so do root: processo homonimo do usuario nao esconde o reparo
                                              timeout: Self.statusTimeout)
         let vms = ContainerCLI.runBinary(pgrepPath,
                                          arguments: ["-x", "vmware-vmx"],
@@ -324,6 +324,13 @@ final class VmnetProbe: Sendable {
     /// cruas dentro do literal quebravam a compilacao do script.
     /// Team ID da VMware (codesign -dv do vmnet-cli instalado).
     static let vmwareTeamID = "EG7KH642X6"
+    /// Requisito designado do vmnet-cli instalado (codesign -dr -): nome,
+    /// Developer ID e o team. So o team aceitaria qualquer binario da VMware
+    /// chamado vmnet-cli, inclusive versoes antigas ou builds de desenvolvimento.
+    static let vmwareRequirement = "identifier \"vmnet-cli\" and anchor apple generic"
+        + " and certificate 1[field.1.2.840.113635.100.6.2.6]"
+        + " and certificate leaf[field.1.2.840.113635.100.6.1.13]"
+        + " and certificate leaf[subject.OU] = \"\(vmwareTeamID)\""
 
     /// O shell ja root confere a assinatura da VMware antes de executar:
     /// /Applications e gravavel pelo grupo admin, entao o bundle poderia ser
@@ -334,7 +341,11 @@ final class VmnetProbe: Sendable {
     /// entao executa o ./vmnet-cli verificado. Residual aceito: os daemons
     /// que o vmnet-cli dispara vem do proprio bundle da VMware.
     func startScript() -> String {
-        let shell = "\(verificationShell()); ./vmnet-cli --stop >/dev/null 2>&1; ./vmnet-cli --start"
+        // Ambiente zerado como root: o vmnet-cli le config de $HOME (gravavel
+        // pelo usuario) e o do shell script herda o ambiente do app; com o
+        // HOME do usuario, um config plantado viraria escrita de arquivo como root.
+        let rootEnv = "/usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+        let shell = "\(verificationShell()); \(rootEnv) ./vmnet-cli --stop >/dev/null 2>&1; \(rootEnv) ./vmnet-cli --start"
         let literal = shell.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "do shell script \"\(literal)\" with administrator privileges"
@@ -345,18 +356,21 @@ final class VmnetProbe: Sendable {
     func verificationShell() -> String {
         func shellQuote(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         let directory = shellQuote(URL(fileURLWithPath: vmnetCliPath).deletingLastPathComponent().path)
-        let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(Self.vmwareTeamID)\""
+        let requirement = Self.vmwareRequirement
         return "cd \(directory) || exit 1; [ -L vmnet-cli ] && exit 1; "
             + "[ \"$(/usr/bin/find . vmnet-cli -maxdepth 0 -user 0 ! -perm -020 ! -perm -002 | /usr/bin/wc -l)\" -eq 2 ] || exit 1; "
-            + "/usr/bin/codesign --verify -R='\(requirement)' ./vmnet-cli || exit 1"
+            + "/usr/bin/codesign --verify --strict -R='\(requirement)' ./vmnet-cli || exit 1"
     }
 
     func start() -> CLIRunResult {
         guard Self.isRootOwned(vmnetCliPath) else {
             return CLIRunResult(stderr: "vmnet-cli nao pertence ao root ou e gravavel; elevacao recusada")
         }
+        // osascript com ambiente minimo: sem HOME do usuario e sem prefixos
+        // gravaveis no PATH herdado pelo shell elevado.
         return ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript()],
-                                      timeout: Self.startTimeout)
+                                      timeout: Self.startTimeout,
+                                      environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
     }
 
     /// O binario roda como root apos a senha: se o usuario (ou quem roda

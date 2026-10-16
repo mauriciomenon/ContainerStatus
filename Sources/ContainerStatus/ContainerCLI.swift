@@ -68,11 +68,14 @@ final class ContainerCLI: Sendable {
 
     /// Executavel que o app aceita rodar: nao gravavel por grupo/outros
     /// (stat segue o symlink ate o destino). Vale para a CLI e as sondas.
+    /// Dono tambem conta: em /opt/homebrew/bin (gravavel pelo grupo admin) um
+    /// binario 0755 de OUTRA conta admin passaria so pelo modo.
     static func isTrustedExecutable(_ path: String) -> Bool {
         var metadata = stat()
         return FileManager.default.isExecutableFile(atPath: path)
             && stat(path, &metadata) == 0
             && metadata.st_mode & (S_IWGRP | S_IWOTH) == 0
+            && (metadata.st_uid == 0 || metadata.st_uid == getuid())
     }
 
     /// Prazo do `--version`: so roda quando o binario muda, e a primeira
@@ -334,11 +337,12 @@ final class ContainerCLI: Sendable {
 
     /// Runs an arbitrary binary (used by the self-test against foreign
     /// executables); the production paths go through `run(_:timeout:)`.
-    static func runBinary(_ path: String, arguments: [String], timeout: TimeInterval) -> CLIRunResult {
-        spawn(URL(fileURLWithPath: path), arguments: arguments, environment: [
-            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-            "HOME": NSHomeDirectory(),
-        ], timeout: timeout)
+    static func runBinary(_ path: String, arguments: [String], timeout: TimeInterval,
+                          environment: [String: String] = [
+                              "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                              "HOME": NSHomeDirectory(),
+                          ]) -> CLIRunResult {
+        spawn(URL(fileURLWithPath: path), arguments: arguments, environment: environment, timeout: timeout)
     }
 
     private func run(_ arguments: [String], timeout: TimeInterval) -> CLIRunResult {
@@ -466,6 +470,13 @@ final class ContainerCLI: Sendable {
         var timedOut = false
         if semaphore.wait(timeout: .now() + timeout) == .timedOut {
             timedOut = true
+            // Arvore coletada ANTES de matar o pai: depois os filhos viram
+            // filhos do launchd e o vinculo se perde. Um CLI travado num
+            // subprocesso (ex.: driver do limactl) deixaria o neto vivo a
+            // cada ciclo. So no timeout: daemon de um start bem-sucedido
+            // (colima, podman) e intencional e fica.
+            let descendants = Self.descendants(of: process.processIdentifier)
+            defer { for pid in descendants { kill(pid, SIGKILL) } }
             process.terminate()
             if semaphore.wait(timeout: .now() + 1.5) == .timedOut {
                 // isRunning antes do kill: um pid ja colhido pode ter sido
@@ -507,6 +518,21 @@ final class ContainerCLI: Sendable {
                             stderr: stderrBox.text, stdout: stdoutBox.text,
                             truncated: stdoutBox.truncated || stderrBox.truncated,
                             signaled: process.terminationReason == .uncaughtSignal)
+    }
+
+    /// Filhos, netos etc. de pid (proc_listchildpids), mais fundos primeiro.
+    static func descendants(of pid: pid_t) -> [pid_t] {
+        var found: [pid_t] = []
+        var pending = [pid]
+        while let current = pending.popLast(), found.count < 256 {
+            var buffer = [pid_t](repeating: 0, count: 128)
+            let count = proc_listchildpids(current, &buffer, Int32(buffer.count * MemoryLayout<pid_t>.size))
+            guard count > 0 else { continue }
+            let children = buffer.prefix(Int(count)).filter { $0 > 0 }
+            found.append(contentsOf: children)
+            pending.append(contentsOf: children)
+        }
+        return found.reversed()
     }
 
     static func parseVersion(_ text: String) -> String? {
