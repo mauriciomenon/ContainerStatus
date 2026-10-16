@@ -49,7 +49,8 @@ About                      Quit
   no stop). O fallback `--disable-kernel-install` roda so apos falha
   explicita do start puro, nunca apos timeout (o bootstrap pode continuar
   no launchd). A operacao nao e cancelavel: o item fica desabilitado ate o
-  resultado (pior caso 40s). O app nunca bloqueia a main thread.
+  resultado (pior caso ~80s: start de 40s com falha explicita seguido do
+  fallback de 40s, mais o status final). O app nunca bloqueia a main thread.
 
 ## Politica de execucao e privilegios
 
