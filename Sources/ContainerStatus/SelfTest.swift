@@ -118,7 +118,8 @@ enum SelfTest {
         /// senao uma falha da consulta passaria por "zero sobreviventes".
         func markedCount() -> Int {
             let found = ContainerCLI.runBinary("/usr/bin/pgrep", arguments: ["-f", treeMarker], timeout: 2)
-            guard found.spawned, !found.timedOut, found.exitCode == 0 || found.exitCode == 1 else { return -1 }
+            guard found.spawned, !found.timedOut, !found.signaled, !found.truncated,
+                  found.exitCode == 0 || found.exitCode == 1 else { return -1 }
             return found.exitCode == 1 ? 0 : found.stdout.split(separator: "\n").count
         }
         let treeDone = DispatchSemaphore(value: 0)
