@@ -106,7 +106,30 @@ enum SelfTest {
                "neto segurando o pipe nao trava a chamada")
         let flood = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "head -c 3000000 /dev/zero | tr '\\0' y"],
                                            timeout: 5)
-        expect(flood.succeeded && flood.stdout.utf8.count == 1 << 20, "saida acima de 1MB e truncada no teto")
+        expect(!flood.succeeded && flood.truncated && flood.stdout.utf8.count == 1 << 20,
+               "saida acima de 1MB e truncada e nao conta como sucesso")
+        // Corte no meio de um caractere UTF-8 (offset impar com 'e' agudo de 2 bytes).
+        let accented = ContainerCLI.runBinary(
+            "/bin/sh", arguments: ["-c", "printf x; yes \"$(printf '\\303\\251')\" | tr -d '\\n' | head -c 1100000"],
+            timeout: 5)
+        expect(accented.truncated && accented.stdout.hasPrefix("x\u{00E9}"),
+               "corte no meio de um caractere UTF-8 nao descarta a saida")
+        // Neto segurando o pipe repetidas vezes: descritores nao vazam (com os
+        // leitores bloqueantes antigos, cada chamada deixava dois abertos).
+        func openDescriptors() -> Int {
+            (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
+        }
+        // autoreleasepool: o selftest roda sem run loop, e os FileHandle so
+        // morrem quando o pool drena (no app o run loop drena a cada evento).
+        let descriptorsBefore = openDescriptors()
+        for _ in 0..<3 {
+            autoreleasepool {
+                _ = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "/bin/sleep 20 & echo ok"], timeout: 2)
+            }
+        }
+        let descriptorsAfter = openDescriptors()
+        expect(descriptorsAfter <= descriptorsBefore,
+               "neto segurando o pipe nao vaza descritores (\(descriptorsBefore) -> \(descriptorsAfter))")
         // stderr acima do buffer do pipe (64KB) com stdout ainda aberto: com
         // leitura serial o filho travava no write ate o watchdog.
         let noisy = ContainerCLI.runBinary("/bin/sh",
@@ -368,6 +391,8 @@ enum SelfTest {
                "id com quebra de linha nao forja linhas no menu")
         expect(ContainerCLI.menuSafe(String(repeating: "a", count: 100)).count == 64,
                "id enorme e truncado")
+        expect(ContainerCLI.menuSafe("a\u{2028}b\u{2029}c") == "a b c",
+               "separadores de linha Unicode tambem viram espaco")
         try writeContainerStub("[]", exitCode: 0)
         expect(countingCLI.runningContainers()?.count == 0, "ls vazio = 0")
         try writeContainerStub("erro", exitCode: 1)
@@ -416,8 +441,16 @@ enum SelfTest {
                && script.contains("--start")
                && script.contains("/usr/bin/codesign --verify") && script.contains(VmnetProbe.vmwareTeamID),
                "script de subida confere a assinatura VMware como root antes de subir")
+        // Verificacao do shell elevado, rodada sem root: stub do usuario cai;
+        // o Fusion real (root:wheel, assinado pela VMware) passa.
+        let stubCheck = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", running.verificationShell() + "; echo OK"],
+                                               timeout: 10)
+        expect(!stubCheck.stdout.contains("OK"), "shell elevado recusa vmnet-cli que nao e do root")
         let realCli = "/Applications/VMware Fusion.app/Contents/Library/vmnet-cli"
         if FileManager.default.fileExists(atPath: realCli) {
+            let realCheck = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", VmnetProbe().verificationShell() + "; echo OK"],
+                                                   timeout: 10)
+            expect(realCheck.stdout == "OK", "shell elevado aceita o vmnet-cli real da VMware")
             let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(VmnetProbe.vmwareTeamID)\""
             expect(ContainerCLI.runBinary("/usr/bin/codesign", arguments: ["--verify", "-R=\(requirement)", realCli],
                                           timeout: 10).succeeded,
@@ -502,12 +535,18 @@ enum SelfTest {
                  stdout: "[{\"Name\":\"Running\",\"Running\":false}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped, "maquina chamada Running nao engana o estado")
+        // Conexao padrao ("Default") apontando para "dev" ligada, mas start/stop
+        // sem nome agem em podman-machine-default, parada: vale a parada.
         _ = try stub("podman", podmanDirectory,
-                     stdout: "[{\"Name\":\"dev\",\"Default\":false,\"Running\":true},"
-                        + "{\"Name\":\"pm\",\"Default\":true,\"Running\":false}]", exitCode: 0)
+                     stdout: "[{\"Name\":\"dev*\",\"Default\":true,\"Running\":true},"
+                        + "{\"Name\":\"podman-machine-default\",\"Default\":false,\"Running\":false}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped,
-               "podman segue a maquina padrao, a mesma que start/stop controlam")
+               "podman segue podman-machine-default, o alvo de start/stop sem nome")
+        _ = try stub("podman", podmanDirectory,
+                     stdout: "[{\"Name\":\"podman-machine-default*\",\"Default\":true,\"Running\":true}]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .running, "podman-machine-default marcada com * e reconhecida")
         let writablePodman = try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
         try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: writablePodman)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path]).resolvedPath() == nil,

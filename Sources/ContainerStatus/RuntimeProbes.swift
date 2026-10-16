@@ -149,15 +149,20 @@ extension RuntimeProbeConfig {
         nature: "podman machine (VM)"
     )
 
+    /// Alvo de `podman machine start/stop` sem nome (docs do podman). A
+    /// lista pode marcar com "*" a conexao padrao no Name, dai o prefixo.
+    static let podmanControlledMachine = "podman-machine-default"
+
     static func podmanState(_ result: CLIRunResult) -> ExternalRuntimeState {
         guard result.succeeded,
               let machines = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [[String: Any]]
         else { return .stopped }
-        // `machine start/stop` sem nome age na maquina padrao: o estado tem
-        // de ser o dela, senao uma VM "dev" ligada mostraria Disable Daemon
-        // que nao a desliga. Sem a chave Default (versao antiga), vale qualquer.
-        let hasDefault = machines.contains { $0["Default"] != nil }
-        let watched = hasDefault ? machines.filter { $0["Default"] as? Bool == true } : machines
+        // `machine start/stop` sem nome agem em podman-machine-default; o
+        // campo Default da lista e a CONEXAO padrao, que pode ser outra. O
+        // estado e o dessa maquina; sem ela, start/stop sem nome nem tem alvo
+        // e a linha so informa se alguma VM roda.
+        let controlled = machines.filter { ($0["Name"] as? String)?.hasPrefix(podmanControlledMachine) == true }
+        let watched = controlled.isEmpty ? machines : controlled
         return watched.contains { $0["Running"] as? Bool == true } ? .running : .stopped
     }
 
@@ -307,14 +312,27 @@ final class VmnetProbe: Sendable {
     /// O shell ja root confere a assinatura da VMware antes de executar:
     /// /Applications e gravavel pelo grupo admin, entao o bundle poderia ser
     /// trocado durante o dialogo de senha, depois da checagem do app.
+    /// O shell root fixa o diretorio com cd (renomear o bundle depois nao
+    /// muda o que ./vmnet-cli aponta), confere como root que diretorio e
+    /// arquivo sao do root, sem escrita de grupo/outros e sem symlink, e so
+    /// entao executa o ./vmnet-cli verificado. Residual aceito: os daemons
+    /// que o vmnet-cli dispara vem do proprio bundle da VMware.
     func startScript() -> String {
-        let quoted = "'" + vmnetCliPath.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(Self.vmwareTeamID)\""
-        let verify = "/usr/bin/codesign --verify -R='\(requirement)' \(quoted) || exit 1"
-        let shell = "\(verify); \(quoted) --stop >/dev/null 2>&1; \(quoted) --start"
+        let shell = "\(verificationShell()); ./vmnet-cli --stop >/dev/null 2>&1; ./vmnet-cli --start"
         let literal = shell.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "do shell script \"\(literal)\" with administrator privileges"
+    }
+
+    /// Etapa de verificacao do shell elevado (testavel sem root): sai com
+    /// erro se algo nao confere, e deixa o shell no diretorio fixado.
+    func verificationShell() -> String {
+        func shellQuote(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let directory = shellQuote(URL(fileURLWithPath: vmnetCliPath).deletingLastPathComponent().path)
+        let requirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(Self.vmwareTeamID)\""
+        return "cd \(directory) || exit 1; [ -L vmnet-cli ] && exit 1; "
+            + "[ \"$(/usr/bin/find . vmnet-cli -maxdepth 0 -user 0 ! -perm -020 ! -perm -002 | /usr/bin/wc -l)\" -eq 2 ] || exit 1; "
+            + "/usr/bin/codesign --verify -R='\(requirement)' ./vmnet-cli || exit 1"
     }
 
     func start() -> CLIRunResult {

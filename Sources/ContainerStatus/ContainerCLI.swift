@@ -324,7 +324,7 @@ final class ContainerCLI: Sendable {
     /// falsas ("Status: ..."), e um id enorme alargaria o menu inteiro.
     static func menuSafe(_ text: String, limit: Int = 64) -> String {
         let flat = String(text.unicodeScalars.map {
-            CharacterSet.controlCharacters.contains($0) ? " " : Character($0)
+            CharacterSet.controlCharacters.union(.newlines).contains($0) ? " " : Character($0)
         })
         return flat.count > limit ? String(flat.prefix(max(0, limit - 3))) + "..." : flat
     }
@@ -422,9 +422,17 @@ final class ContainerCLI: Sendable {
             private let lock = NSLock()
             private var storage = Data()
             private var finished = false
+            private var overflowed = false
             let done = DispatchSemaphore(value: 0)
+            var truncated: Bool { lock.withLock { overflowed } }
+            /// Decodificacao tolerante: corte no meio de um caractere UTF-8
+            /// nao pode descartar a saida inteira.
+            var text: String {
+                String(decoding: get(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             func append(_ chunk: Data) {
                 lock.withLock {
+                    if storage.count + chunk.count > Self.cap { overflowed = true }
                     if storage.count < Self.cap { storage.append(chunk.prefix(Self.cap - storage.count)) }
                 }
             }
@@ -491,11 +499,9 @@ final class ContainerCLI: Sendable {
             return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
                                 stderr: "saida nao disponivel: pipe mantido aberto por processo filho")
         }
-        let stderrText = String(data: stderrBox.get(), encoding: .utf8) ?? ""
-        let stdoutText = String(data: stdoutBox.get(), encoding: .utf8) ?? ""
         return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
-                            stderr: stderrText.trimmingCharacters(in: .whitespacesAndNewlines),
-                            stdout: stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
+                            stderr: stderrBox.text, stdout: stdoutBox.text,
+                            truncated: stdoutBox.truncated || stderrBox.truncated)
     }
 
     static func parseVersion(_ text: String) -> String? {

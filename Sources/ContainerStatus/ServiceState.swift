@@ -34,6 +34,9 @@ struct CLIRunResult: Sendable {
     var spawned: Bool = false
     var stderr: String = ""
     var stdout: String = ""
+    /// Saida cortada no teto de captura: JSON ou tabela incompletos nao
+    /// podem ser lidos como resposta valida.
+    var truncated: Bool = false
 
-    var succeeded: Bool { spawned && !timedOut && exitCode == 0 }
+    var succeeded: Bool { spawned && !timedOut && !truncated && exitCode == 0 }
 }
