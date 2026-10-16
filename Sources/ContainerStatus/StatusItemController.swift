@@ -1232,11 +1232,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         lumeController.lastAppliedSequence = -1
         let firedBefore = lumeController.lastAppliedSequence
         lumeController.startPolling(every: 0.3)
-        let fireDeadline = Date().addingTimeInterval(2)
-        while Date() < fireDeadline && lumeController.lastAppliedSequence < firedBefore + 2 {
+        // Duas aplicacoes distintas: um timer que dispara uma vez e congela falha.
+        var applications: Set<Int> = []
+        let fireDeadline = Date().addingTimeInterval(4)
+        while Date() < fireDeadline && applications.count < 2 {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            if lumeController.lastAppliedSequence > firedBefore { applications.insert(lumeController.lastAppliedSequence) }
         }
-        expect(lumeController.lastAppliedSequence >= firedBefore + 2, "timer dispara polls de verdade na cadencia")
+        expect(applications.count >= 2, "timer repete polls de verdade na cadencia (\(applications.count) aplicacoes)")
         lumeController.pollTimer?.cancel()
         let settle = Date().addingTimeInterval(1)
         while Date() < settle { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }

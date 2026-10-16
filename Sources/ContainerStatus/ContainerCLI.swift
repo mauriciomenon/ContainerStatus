@@ -475,9 +475,11 @@ final class ContainerCLI: Sendable {
             // subprocesso (ex.: driver do limactl) deixaria o neto vivo a
             // cada ciclo. So no timeout: daemon de um start bem-sucedido
             // (colima, podman) e intencional e fica.
-            let descendants = Self.descendants(of: process.processIdentifier)
-            defer { for pid in descendants { kill(pid, SIGKILL) } }
+            let descendants = process.isRunning ? Self.descendants(of: process.processIdentifier) : []
             process.terminate()
+            // Logo apos coletar: quanto menor o intervalo, menor a chance de
+            // um pid da lista ter sido reciclado por outro processo.
+            for pid in descendants { kill(pid, SIGKILL) }
             if semaphore.wait(timeout: .now() + 1.5) == .timedOut {
                 // isRunning antes do kill: um pid ja colhido pode ter sido
                 // reciclado. Resta uma janela entre o teste e o kill sem
@@ -521,16 +523,23 @@ final class ContainerCLI: Sendable {
     }
 
     /// Filhos, netos etc. de pid (proc_listchildpids), mais fundos primeiro.
+    /// Travessia completa: o buffer e dimensionado pela contagem que o kernel
+    /// informa (com folga para filhos novos), sem teto fixo por pai. O
+    /// conjunto `seen` impede laco; o limite global so existe contra loucura.
     static func descendants(of pid: pid_t) -> [pid_t] {
         var found: [pid_t] = []
+        var seen: Set<pid_t> = [pid]
         var pending = [pid]
-        while let current = pending.popLast(), found.count < 256 {
-            var buffer = [pid_t](repeating: 0, count: 128)
+        while let current = pending.popLast(), found.count < 8192 {
+            let estimate = max(0, Int(proc_listchildpids(current, nil, 0)))
+            guard estimate > 0 else { continue }
+            var buffer = [pid_t](repeating: 0, count: estimate + 32)
             let count = proc_listchildpids(current, &buffer, Int32(buffer.count * MemoryLayout<pid_t>.size))
             guard count > 0 else { continue }
-            let children = buffer.prefix(Int(count)).filter { $0 > 0 }
-            found.append(contentsOf: children)
-            pending.append(contentsOf: children)
+            for child in buffer.prefix(Int(count)) where child > 0 && seen.insert(child).inserted {
+                found.append(child)
+                pending.append(child)
+            }
         }
         return found.reversed()
     }

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Command-line self-test (`ContainerStatus --selftest`): verifies the pure
 /// logic and the process watchdog without touching the real service. Replaces
@@ -103,12 +104,36 @@ enum SelfTest {
                "filho que ignora SIGTERM morre de fato pelo SIGKILL")
         // CLI que trava num subprocesso: o timeout leva a arvore toda, o neto
         // nao sobrevive ao pai (antes ficava um por ciclo de poll).
-        let treeMarker = "cs_tree_\(UUID().uuidString.prefix(8))"
-        let tree = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "/bin/sleep 30 \(treeMarker) 2>/dev/null & /bin/sleep 30"],
-                                          timeout: 0.5)
+        // Script com nome marcado (copia de binario do sistema fora de /bin e
+        // morta pelo macOS): neto em background e filho em primeiro plano,
+        // ambos encontraveis por pgrep -f enquanto rodam.
+        let treeBinary = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cs_tree_\(UUID().uuidString.prefix(8))").path
+        // Ignora TERM/HUP como um driver travado: so o kill da arvore o derruba.
+        try? "#!/bin/sh\ntrap '' TERM HUP\nwhile :; do /bin/sleep 1; done\n"
+            .write(toFile: treeBinary, atomically: false, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: treeBinary)
+        defer { try? FileManager.default.removeItem(atPath: treeBinary) }
+        let treeMarker = URL(fileURLWithPath: treeBinary).lastPathComponent
+        func markedCount() -> Int {
+            let found = ContainerCLI.runBinary("/usr/bin/pgrep", arguments: ["-f", treeMarker], timeout: 2)
+            return found.stdout.split(separator: "\n").count
+        }
+        let treeDone = DispatchSemaphore(value: 0)
+        let treeBox = OSAllocatedUnfairLock<CLIRunResult?>(initialState: nil)
+        DispatchQueue.global().async {
+            let result = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "'\(treeBinary)' & wait"],
+                                                timeout: 1.5)
+            treeBox.withLock { $0 = result }
+            treeDone.signal()
+        }
+        Thread.sleep(forTimeInterval: 0.8)
+        let aliveDuring = markedCount()
+        _ = treeDone.wait(timeout: .now() + 10)
         Thread.sleep(forTimeInterval: 0.3)
-        let survivor = ContainerCLI.runBinary("/usr/bin/pgrep", arguments: ["-f", treeMarker], timeout: 2)
-        expect(tree.timedOut && survivor.exitCode == 1, "timeout encerra tambem os descendentes do CLI")
+        let aliveAfter = markedCount()
+        expect(treeBox.withLock({ $0 })?.timedOut == true && aliveDuring >= 2 && aliveAfter == 0,
+               "timeout encerra a arvore toda (vivos durante: \(aliveDuring), depois: \(aliveAfter))")
 
         // Neto segurando o pipe: retorna no teto de IO sem prender threads e
         // sem perder o exit do filho; a saida e dada como indisponivel.
@@ -705,6 +730,21 @@ enum SelfTest {
         _ = try bare("limactl", limaDirectory, exitCode: 1)
         expect(limaProbe.currentInfo(reusing: reused) == "instancias: dev Running",
                "tooltip do lima usa a saida do status sem rodar o limactl de novo")
+        // Status que estourou o prazo: o tooltip tambem nao repete a consulta.
+        let calls = limaDirectory.appendingPathComponent("limactl.calls").path
+        try "#!/bin/sh\nprintf 'c\\n' >> \"\(calls)\"\n/bin/sleep 20\n"
+            .write(toFile: limaDirectory.appendingPathComponent("limactl").path, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: limaDirectory.appendingPathComponent("limactl").path)
+        let slowLima = RuntimeProbe(config: RuntimeProbeConfig(
+            label: "Lima", binaryName: "limactl", statusArguments: RuntimeProbeConfig.lima.statusArguments,
+            interpret: RuntimeProbeConfig.lima.interpret, info: RuntimeProbeConfig.lima.info, statusTimeout: 0.3),
+            directories: [limaDirectory.path])
+        let slowStatus = slowLima.statusWithResult()
+        _ = slowLima.tooltipInfo(state: slowStatus.state, statusResult: slowStatus.result)
+        let limaCalls = (try? String(contentsOfFile: calls, encoding: .utf8))?.split(separator: "\n").count ?? 0
+        expect(slowStatus.state == .stopped && limaCalls == 1,
+               "lima estourado: uma unica consulta, o tooltip nao repete (\(limaCalls) chamadas)")
 
         // Finch: vm status imprime Running / Stopped / Nonexistent.
         let finchDirectory = temporary.appendingPathComponent("finch", isDirectory: true)

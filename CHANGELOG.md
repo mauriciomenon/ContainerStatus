@@ -19,7 +19,8 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 ### Alterado
 - Checagem a cada 15s com o menu fechado e 3s com ele aberto (~5x menos
   processos curtos).
-- Lima: prazo proprio de 10s e um so `limactl` por ciclo.
+- Lima: prazo proprio de 10s e um so `limactl` por ciclo, inclusive quando a
+  consulta estoura o prazo.
 
 ### Seguranca
 - vmnet: cada `vmnet-cli` roda como root com ambiente zerado (o HOME do

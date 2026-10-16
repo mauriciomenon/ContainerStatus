@@ -149,7 +149,8 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 - Ambiente minimo e fixo (`PATH` e `HOME`); o app nao herda o ambiente de
   quem o lancou, entao o comportamento e o mesmo no Terminal, no Finder e
   no login.
-- O watchdog mata somente o processo filho (a CLI), nunca o daemon. Se a
+- No timeout o watchdog mata a CLI e os descendentes dela, nunca o daemon
+  (servicos que um start bem-sucedido deixa de pe ficam intactos). Se a
   CLI travar, o servico continua sob o launchd e o app marca "indisponivel"
   ate a proxima checagem.
 - O stop e graceful pela CLI via launchd (encerra containers, espera a

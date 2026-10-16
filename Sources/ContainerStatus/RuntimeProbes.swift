@@ -451,8 +451,10 @@ final class RuntimeProbe: Sendable {
         }
         let result = ContainerCLI.runBinary(config.statusBinary ?? path, arguments: config.statusArguments,
                                             timeout: config.statusTimeout)
+        // Resultado volta tambem na falha: o tooltip reaproveita e nao repete
+        // um CLI que acabou de estourar o prazo (Lima travado custava 2x 10s).
         guard result.spawned, !result.timedOut else {
-            return (.stopped, path, nil)
+            return (.stopped, path, result)
         }
         return (config.interpret(result), path, result)
     }
