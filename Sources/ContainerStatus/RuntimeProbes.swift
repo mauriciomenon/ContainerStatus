@@ -37,6 +37,8 @@ struct RuntimeProbeConfig: Sendable {
     /// Binario absoluto que responde o status no lugar do proprio runtime
     /// (ex.: launchctl para servico brew); a deteccao continua pelo binaryName.
     let statusBinary: String?
+    /// Prazo da consulta de status (Lima da ate 3s por instancia).
+    let statusTimeout: TimeInterval
     /// Caminho de app que marca a instalacao (ex.: /Applications/Docker.app).
     /// Quando setado, "detectado" passa a ser existencia deste caminho, nao
     /// do binario - providers de app (Docker Desktop, Rancher) sobrevivem ao
@@ -53,7 +55,8 @@ struct RuntimeProbeConfig: Sendable {
          interpret: @Sendable @escaping (CLIRunResult) -> ExternalRuntimeState,
          control: RuntimeControl? = nil, info: RuntimeInfo? = nil,
          autoStartPatterns: [String] = [], countArguments: [String]? = nil,
-         statusBinary: String? = nil, detectAppPath: String? = nil, nature: String = "",
+         statusBinary: String? = nil, statusTimeout: TimeInterval = 2,
+         detectAppPath: String? = nil, nature: String = "",
          appBased: Bool = false) {
         self.label = label
         self.binaryName = binaryName
@@ -64,6 +67,7 @@ struct RuntimeProbeConfig: Sendable {
         self.autoStartPatterns = autoStartPatterns
         self.countArguments = countArguments
         self.statusBinary = statusBinary
+        self.statusTimeout = statusTimeout
         self.detectAppPath = detectAppPath
         self.nature = nature
         self.appBased = appBased
@@ -116,6 +120,7 @@ extension RuntimeProbeConfig {
                 ? .running : .stopped
         },
         info: RuntimeInfo(label: "instancias", arguments: ["list", "--format", "{{.Name}} {{.Status}}"]),
+        statusTimeout: 10,  // ate 3s por instancia com hostagent lento
         nature: "VMs Lima (limactl)"
     )
 
@@ -434,15 +439,22 @@ final class RuntimeProbe: Sendable {
     }
 
     func currentStatus() -> (state: ExternalRuntimeState, path: String?) {
+        let status = statusWithResult()
+        return (status.state, status.path)
+    }
+
+    /// Status e a saida que o gerou: o tooltip reaproveita quando o comando
+    /// informativo e o mesmo (Lima), em vez de rodar o CLI duas vezes.
+    func statusWithResult() -> (state: ExternalRuntimeState, path: String?, result: CLIRunResult?) {
         guard let path = resolvedPath() else {
-            return (.notInstalled, nil)
+            return (.notInstalled, nil, nil)
         }
         let result = ContainerCLI.runBinary(config.statusBinary ?? path, arguments: config.statusArguments,
-                                            timeout: Self.statusTimeout)
+                                            timeout: config.statusTimeout)
         guard result.spawned, !result.timedOut else {
-            return (.stopped, path)
+            return (.stopped, path, nil)
         }
-        return (config.interpret(result), path)
+        return (config.interpret(result), path, result)
     }
 
     /// Linha clicavel (passo 2)? Exige receita de controle.
@@ -481,10 +493,11 @@ final class RuntimeProbe: Sendable {
 
     /// Informacao de planta (ex.: contexto do docker), ou nil quando o
     /// runtime nao tem sonda informativa ou o comando falhou.
-    func currentInfo() -> String? {
+    func currentInfo(reusing statusResult: CLIRunResult? = nil) -> String? {
         guard let info = config.info, let path = resolvedPath() else { return nil }
-        let result = ContainerCLI.runBinary(path, arguments: info.arguments,
-                                            timeout: Self.statusTimeout)
+        let reusable = config.statusBinary == nil && info.arguments == config.statusArguments
+        let result = (reusable ? statusResult : nil)
+            ?? ContainerCLI.runBinary(path, arguments: info.arguments, timeout: config.statusTimeout)
         // Ate 6 linhas (uma por instancia no Lima; o docker context e uma so).
         let lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: true)
             .map { ContainerCLI.menuSafe(String($0).trimmingCharacters(in: .whitespaces)) }
@@ -524,13 +537,13 @@ final class RuntimeProbe: Sendable {
     /// Unica versao verdadeira - spawnPoll, finishRuntime e o diagnostico
     /// consomem daqui. nil quando nao ha nada a mostrar. Bloqueante: chamar
     /// fora da main thread.
-    func tooltipInfo(state: ExternalRuntimeState) -> String? {
+    func tooltipInfo(state: ExternalRuntimeState, statusResult: CLIRunResult? = nil) -> String? {
         guard state != .notInstalled else { return nil }
         var parts: [String] = []
         if !config.nature.isEmpty {
             parts.append(config.nature)
         }
-        if let runtimeInfo = currentInfo() {
+        if let runtimeInfo = currentInfo(reusing: statusResult) {
             parts.append(runtimeInfo)
         }
         if let autoStart = autoStartLabel() {

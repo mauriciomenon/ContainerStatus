@@ -693,6 +693,18 @@ enum SelfTest {
                "tooltip do lima lista todas as instancias")
         _ = try stub("limactl", limaDirectory, stdout: "armbuild Stopped\nRunningVM Stopped", exitCode: 0)
         expect(limaProbe.currentStatus().state == .stopped, "instancia parada com Running no nome nao engana")
+        _ = try stub("limactl", limaDirectory, stdout: "my vm Running", exitCode: 0)
+        expect(limaProbe.currentStatus().state == .running, "instancia com espaco no nome e reconhecida")
+        _ = try stub("limactl", limaDirectory, stdout: "", exitCode: 0)
+        expect(limaProbe.currentStatus().state == .stopped && limaProbe.currentInfo() == nil,
+               "lima sem instancias = parado e sem tooltip")
+        expect(RuntimeProbeConfig.lima.statusTimeout == 10, "lima tem prazo proprio (3s por instancia)")
+        // Tooltip reaproveita a saida do status: um limactl por ciclo, nao dois.
+        let reused = CLIRunResult(exitCode: 0, spawned: true, stdout: "dev Running")
+        try FileManager.default.removeItem(atPath: limaDirectory.appendingPathComponent("limactl").path)
+        _ = try bare("limactl", limaDirectory, exitCode: 1)
+        expect(limaProbe.currentInfo(reusing: reused) == "instancias: dev Running",
+               "tooltip do lima usa a saida do status sem rodar o limactl de novo")
 
         // Finch: vm status imprime Running / Stopped / Nonexistent.
         let finchDirectory = temporary.appendingPathComponent("finch", isDirectory: true)

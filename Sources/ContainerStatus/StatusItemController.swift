@@ -645,9 +645,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             var states: [String: ExternalRuntimeState] = [:]
             var info: [String: String] = [:]
             for probe in runtimes {
-                let (state, _) = probe.currentStatus()
+                let status = probe.statusWithResult()
+                let state = status.state
                 states[probe.label] = state
-                if let tooltip = probe.tooltipInfo(state: state) {
+                if let tooltip = probe.tooltipInfo(state: state, statusResult: status.result) {
                     info[probe.label] = tooltip
                 }
             }
@@ -1225,6 +1226,26 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(lumeController.pollInterval == StatusItemController.idlePollInterval, "fechar o menu volta a 15s")
         lumeController.pollTimer?.cancel()
         lumeController.pollTimer = nil
+        // Disparo real: um timer curto precisa produzir polls aplicados, e o
+        // cancelado nao pode produzir mais nenhum.
+        // Sequencias manuais dos testes acima ficam acima do contador real.
+        lumeController.lastAppliedSequence = -1
+        let firedBefore = lumeController.lastAppliedSequence
+        lumeController.startPolling(every: 0.3)
+        let fireDeadline = Date().addingTimeInterval(2)
+        while Date() < fireDeadline && lumeController.lastAppliedSequence < firedBefore + 2 {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        expect(lumeController.lastAppliedSequence >= firedBefore + 2, "timer dispara polls de verdade na cadencia")
+        lumeController.pollTimer?.cancel()
+        let settle = Date().addingTimeInterval(1)
+        while Date() < settle { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        let afterCancel = lumeController.lastAppliedSequence
+        let quiet = Date().addingTimeInterval(1)
+        while Date() < quiet { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        expect(lumeController.lastAppliedSequence == afterCancel, "timer cancelado para de disparar")
+        lumeController.pollTimer = nil
+        lumeController.pollInterval = 0
 
         // Pedidos no meio de um ciclo viram UM ciclo extra (rescan nao some),
         // nunca uma fila.

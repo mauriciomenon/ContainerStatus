@@ -118,7 +118,7 @@ Cobertura por metodo de instalacao: **.pkg do site** (instala em
 que o binario `container` esteja em um dos diretorios acima ou no PATH do
 usuario). Enquanto a CLI nao existe, o ponto fica cinza e a acao do daemon
 some (o item GitHub continua levando ao projeto); assim que ela aparece em
-qualquer um desses lugares, o proximo poll (ate 3s) detecta e o menu passa
+qualquer um desses lugares, o proximo poll (ate 15s; 3s com o menu aberto) detecta e o menu passa
 a oferecer ligar/desligar - sem reiniciar o app.
 
 Quando existe **mais de uma copia** (por exemplo, .pkg antigo + brew

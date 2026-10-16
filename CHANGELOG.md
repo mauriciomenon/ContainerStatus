@@ -19,6 +19,16 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 ### Alterado
 - Checagem a cada 15s com o menu fechado e 3s com ele aberto (~5x menos
   processos curtos).
+- Lima: prazo proprio de 10s e um so `limactl` por ciclo.
+
+### Seguranca
+- vmnet: cada `vmnet-cli` roda como root com ambiente zerado (o HOME do
+  usuario fazia o binario ler config gravavel por ele); requisito de
+  assinatura designado completo da VMware; daemons contados so do root.
+- Timeout de CLI encerra a arvore de descendentes (neto preso sobrevivia).
+- Binario confiavel exige dono root ou o proprio usuario.
+- Aviso de release: URL montada pelo app, tag com teto, sessao sem cache.
+- Testes e `--dump-menu` nao gravam mais o ponto como oculto.
 
 ## [1.1.0] - 2026-10-16
 
