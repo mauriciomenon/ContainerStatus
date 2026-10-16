@@ -165,6 +165,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         super.init()
         loginStatusCache = Self.loginStatus
         buildMenu()
+        // Nome estavel: sem ele cada versao virava um "Item-N" novo no
+        // defaults, a posicao arrastada pelo usuario se perdia e o ponto
+        // podia nascer na borda direita, depois do relogio.
+        if Bundle.main.bundleIdentifier != nil { item.autosaveName = "ContainerStatusDot" }
         item.menu = menu
         item.button?.image = Self.dotImage(state: state, dimmed: false)
     }
