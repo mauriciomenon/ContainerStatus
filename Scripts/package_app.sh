@@ -99,7 +99,16 @@ FINAL_APP="$ROOT/${APP_NAME}.app"
 # apagam o bundle um do outro.
 mkdir -p "$ROOT/.build"
 STAGING_DIR=$(mktemp -d "$ROOT/.build/staging.XXXXXX")
-trap 'rm -rf "$STAGING_DIR"' EXIT
+# Backup fica FORA do staging: a limpeza (inclusive por sinal) nunca apaga a
+# unica copia do bundle anterior. O lock serializa a troca entre execucoes.
+BACKUP="$ROOT/${APP_NAME}.previous.app"
+LOCK_DIR="$ROOT/.build/package.lock"
+HAVE_LOCK=0
+cleanup() {
+  rm -rf "$STAGING_DIR"
+  if (( HAVE_LOCK == 1 )); then rmdir "$LOCK_DIR" 2>/dev/null || true; fi
+}
+trap cleanup EXIT
 APP="$STAGING_DIR/${APP_NAME}.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ICON_TARGET="$ROOT/Icon.icns"
@@ -159,15 +168,28 @@ fi
 codesign "${CODESIGN_ARGS[@]}" "$APP"
 codesign --verify --strict "$APP"
 
-# Troca com rollback: o bundle anterior vira backup ate o novo estar no
-# lugar; se o mv falhar, o anterior volta.
-BACKUP="$STAGING_DIR/previous.app"
+# Troca com rollback, sob lock (mkdir e atomico): sem ele, uma execucao
+# concorrente podia achar o destino vazio e o mv aninhava um bundle dentro
+# do outro. Lock velho (kill -9) faz desistir apos ~60s nomeando o caminho.
+for _ in {1..300}; do
+  if mkdir "$LOCK_DIR" 2>/dev/null; then HAVE_LOCK=1; break; fi
+  sleep 0.2
+done
+if (( HAVE_LOCK == 0 )); then
+  echo "ERROR: another packaging holds $LOCK_DIR (remove it if stale)" >&2
+  exit 1
+fi
+rm -rf "$BACKUP"
 if [[ -e "$FINAL_APP" ]]; then
   mv "$FINAL_APP" "$BACKUP"
 fi
 if ! mv "$APP" "$FINAL_APP"; then
-  [[ -e "$BACKUP" ]] && mv "$BACKUP" "$FINAL_APP"
-  echo "ERROR: could not install $FINAL_APP; previous bundle restored" >&2
+  if [[ -e "$BACKUP" ]] && mv "$BACKUP" "$FINAL_APP"; then
+    echo "ERROR: could not install $FINAL_APP; previous bundle restored" >&2
+  else
+    echo "ERROR: could not install $FINAL_APP; previous bundle kept at $BACKUP" >&2
+  fi
   exit 1
 fi
+rm -rf "$BACKUP"
 echo "Created $FINAL_APP"

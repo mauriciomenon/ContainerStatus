@@ -278,6 +278,8 @@ Sources/ContainerStatus/
   AppMain.swift              bootstrap NSApplication (accessory) e autotestes
   ServiceState.swift         enum de estado + mapeamento de codigo de saida
   ContainerCLI.swift         wrapper da CLI com watchdog e ambiente explicito
+  RuntimeProbes.swift        sondas Docker/Podman/Lume/OrbStack/Finch e vmnet
+  UpstreamRelease.swift      ultima release do apple/container no GitHub
   SelfTest.swift             checagens do nucleo e entrada dos testes de menu
   StatusItemController.swift NSStatusItem, menu, maquina de estados, polling
 Scripts/                     icone, validacao e empacotamento .app sem Xcode
