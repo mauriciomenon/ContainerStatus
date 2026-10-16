@@ -811,15 +811,22 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // toggle); sondas fora da main, escrita de volta no main actor.
         guard let probe = runtimes.first(where: { $0.label == label }) else { return }
         let epoch = mutationEpoch
+        let sequence = lastAppliedSequence
         Task.detached(priority: .utility) { [weak self] in
             let tooltip = probe.tooltipInfo(state: state)
             await MainActor.run { [weak self] in
-                // Outra mutacao no meio: este texto ja e do estado anterior.
-                guard let self, self.mutationEpoch == epoch else { return }
-                self.runtimeInfo[label] = tooltip
-                self.apply()
+                self?.publishTooltip(label: label, tooltip: tooltip, epoch: epoch, sequence: sequence)
             }
         }
+    }
+
+    /// Tooltip calculado em segundo plano so entra se nada mais novo chegou
+    /// enquanto ele rodava: outra mutacao (epoca) ou um poll ja aplicado
+    /// (sequencia), que traz informacao mais recente.
+    private func publishTooltip(label: String, tooltip: String?, epoch: Int, sequence: Int) {
+        guard mutationEpoch == epoch, lastAppliedSequence == sequence else { return }
+        runtimeInfo[label] = tooltip
+        apply()
     }
 
     // Regressao opcional de AppKit, sem iniciar polling ou executar a CLI real.
@@ -1009,6 +1016,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         expect(toggleController.runtimeStates["Colima"] == .running,
                "clique segue o rotulo exibido, nao uma releitura do estado")
+
+        // Tooltip atrasado de toggle nao sobrescreve poll aplicado depois.
+        let tooltipEpoch = toggleController.mutationEpoch
+        let tooltipSequence = toggleController.lastAppliedSequence
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .running],
+                                info: ["Colima": "novo"], sequence: tooltipSequence + 1)
+        toggleController.publishTooltip(label: "Colima", tooltip: "velho",
+                                        epoch: tooltipEpoch, sequence: tooltipSequence)
+        expect(toggleController.runtimeInfo["Colima"] == "novo",
+               "tooltip atrasado nao sobrescreve poll mais recente")
+        toggleController.publishTooltip(label: "Colima", tooltip: "atual", epoch: toggleController.mutationEpoch,
+                                        sequence: toggleController.lastAppliedSequence)
+        expect(toggleController.runtimeInfo["Colima"] == "atual", "tooltip sem nada mais novo e publicado")
 
         // Toggle em voo: poll nao reescreve o estado do runtime.
         toggleController.runtimeActivity["Colima"] = true
