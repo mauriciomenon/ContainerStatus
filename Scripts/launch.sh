@@ -14,7 +14,7 @@ if [[ ! -d "$APP_PATH" ]]; then
 fi
 # Diretorio existir nao basta: bundle incompleto ou com assinatura quebrada
 # nao abre, e a instancia em uso ja teria sido encerrada.
-if ! codesign --verify --strict "$APP_PATH" 2>/dev/null; then
+if [[ ! -x "$APP_PATH/Contents/MacOS/$APP_NAME" ]] || ! codesign --verify --strict "$APP_PATH" 2>/dev/null; then
     echo "ERROR: ${APP_NAME}.app at $APP_PATH is incomplete or has an invalid signature"
     exit 1
 fi

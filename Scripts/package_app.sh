@@ -95,9 +95,12 @@ done
 # Monta e assina em area de staging; o bundle anterior so e trocado no fim,
 # entao uma falha no meio deixa o ContainerStatus.app antigo intacto.
 FINAL_APP="$ROOT/${APP_NAME}.app"
-STAGING_DIR="$ROOT/.build/staging"
+# Staging exclusivo por execucao: dois empacotamentos simultaneos nao
+# apagam o bundle um do outro.
+mkdir -p "$ROOT/.build"
+STAGING_DIR=$(mktemp -d "$ROOT/.build/staging.XXXXXX")
+trap 'rm -rf "$STAGING_DIR"' EXIT
 APP="$STAGING_DIR/${APP_NAME}.app"
-rm -rf "$STAGING_DIR"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ICON_TARGET="$ROOT/Icon.icns"
 
@@ -156,7 +159,15 @@ fi
 codesign "${CODESIGN_ARGS[@]}" "$APP"
 codesign --verify --strict "$APP"
 
-rm -rf "$FINAL_APP"
-mv "$APP" "$FINAL_APP"
-rm -rf "$STAGING_DIR"
+# Troca com rollback: o bundle anterior vira backup ate o novo estar no
+# lugar; se o mv falhar, o anterior volta.
+BACKUP="$STAGING_DIR/previous.app"
+if [[ -e "$FINAL_APP" ]]; then
+  mv "$FINAL_APP" "$BACKUP"
+fi
+if ! mv "$APP" "$FINAL_APP"; then
+  [[ -e "$BACKUP" ]] && mv "$BACKUP" "$FINAL_APP"
+  echo "ERROR: could not install $FINAL_APP; previous bundle restored" >&2
+  exit 1
+fi
 echo "Created $FINAL_APP"

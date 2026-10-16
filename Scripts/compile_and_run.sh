@@ -48,7 +48,9 @@ SIGNING_MODE=adhoc ARCHES="${ARCHES_VALUE}" "${ROOT_DIR}/Scripts/package_app.sh"
 # Caminhos viram regex de pgrep/pkill: escapar os metacaracteres ('.' de
 # .build e de .app casava qualquer caractere) e ancorar o fim do executavel.
 re_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g'; }
-APP_PROCESS_REGEX="/$(re_escape "${APP_PROCESS_PATTERN}")\$"
+# Ancorado no inicio tambem: o app roda como caminho absoluto puro, e
+# "lldb /x/ContainerStatus.app/..." ou "tail ..." nao comecam com "/".
+APP_PROCESS_REGEX="^/(.*/)?$(re_escape "${APP_PROCESS_PATTERN}")\$"
 
 log "==> Killing existing ${APP_NAME} instances"
 pkill -f "${APP_PROCESS_REGEX}" 2>/dev/null || true
