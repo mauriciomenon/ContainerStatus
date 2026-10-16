@@ -4,6 +4,8 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-16
+
 ### Adicionado
 - Aviso "Update available: x.y.z" quando sai release nova do apple/container
   (API do GitHub no arranque, a cada 6h e no rescan; unica conexao de rede).
@@ -25,11 +27,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 - Erro de login persistia apos um registro bem-sucedido.
 - Clique de toggle podia inverter a acao exibida.
 - Tooltip dizia "CLI not found" com a CLI instalada mas sem responder.
+- Podman passa a seguir a maquina padrao, a mesma que Enable/Disable controla.
+- Rescan com uma checagem em andamento era descartado; agora roda em seguida.
+- Leitura de saida dos comandos cancelavel: processo neto segurando o pipe
+  nao prende mais threads; saida limitada a 1MB.
+- Falha transitoria de `system version` nao desliga mais o aviso de servico.
+- Empacotamento so substitui o bundle depois de assinar com sucesso.
 
 ### Seguranca
 - CLI em `~/.local/bin` ou no PATH so e usada sem instalacao no sistema;
   binario gravavel por grupo/outros e ignorado.
-- vmnet-cli so e elevado a root se o arquivo e o caminho forem do root.
+- vmnet-cli so e elevado a root se o arquivo e o caminho forem do root, e o
+  shell elevado confere a assinatura da VMware antes de executar.
+- Sondas de runtime tambem ignoram binario gravavel por grupo/outros.
 - Ids de container sem caracteres de controle no menu.
 - Watchdog confere se o filho vive antes do SIGKILL e nao espera sem prazo.
 
