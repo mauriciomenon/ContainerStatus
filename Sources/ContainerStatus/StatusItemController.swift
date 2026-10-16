@@ -342,7 +342,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         place(dockerDetectItem, present: true)
 
         for config in RuntimeProbeConfig.dockerFamily {
-            guard config.label != "Docker" else { continue }
             let subState = runtimeStates[config.label] ?? .notInstalled
             guard let statusItem = subStatusItems[config.label],
                   let actionItem = subActionItems[config.label] else { continue }
@@ -451,8 +450,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
 
         place(tailSep, present: true)
+        // Texto vem do stderr de CLIs externas: sem controle, com teto.
         if let detail, !detail.isEmpty {
-            errorItem.title = detail
+            errorItem.title = ContainerCLI.menuSafe(detail, limit: 120)
             place(errorItem, present: true)
         } else {
             place(errorItem, present: false)
@@ -545,11 +545,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Um ciclo por vez: com sondas travadas um ciclo passa dos 3s do timer,
     /// e enfileirar o proximo mesmo assim fazia a fila crescer sem limite.
     private var pollInFlight = false
+    /// Pedido feito com um ciclo em voo (rescan, menu aberto): esse ciclo ja
+    /// leu o estado antigo, entao roda mais um assim que ele aterrissar.
+    private var pollPending = false
 
     /// Captura a epoca no main actor ANTES de enfileirar a leitura; o absorb
     /// so aceita leituras da epoca corrente.
     private func spawnPoll(sequence: Int) {
-        guard !pollInFlight else { return }
+        guard !pollInFlight else {
+            pollPending = true
+            return
+        }
         pollInFlight = true
         let epoch = mutationEpoch
         pollQueue.async { [cli, runtimes, vmnet, weak self] in
@@ -572,9 +578,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
             let vmnetStatus = vmnet.currentStatus()
             Task { @MainActor [weak self] in
-                self?.pollInFlight = false
-                self?.absorb(poll: result, containers: containers, runtimes: states, info: info,
-                             vmnet: vmnetStatus, sequence: sequence, epoch: epoch)
+                guard let self else { return }
+                self.pollInFlight = false
+                self.absorb(poll: result, containers: containers, runtimes: states, info: info,
+                            vmnet: vmnetStatus, sequence: sequence, epoch: epoch)
+                if self.pollPending {
+                    self.pollPending = false
+                    self.spawnPoll(sequence: self.nextSequence())
+                }
             }
         }
     }
@@ -601,7 +612,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             containerCount = containers.count
         }
         if let runtimes {
-            for (label, runtimeState) in runtimes {
+            // Runtime com toggle em voo: finishRuntime e quem decide o estado;
+            // o poll no meio faria a linha piscar para o estado anterior.
+            for (label, runtimeState) in runtimes where runtimeActivity[label] != true {
                 self.runtimeStates[label] = runtimeState
                 // Ausente em info = sem tooltip agora (ex.: desinstalado);
                 // nao herda o texto do poll anterior.
@@ -611,7 +624,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         lastAppliedSequence = sequence
         if activity == .none {
             state = poll.state
-            if let pollDetail = poll.detail {
+            // Detalhe vazio (stderr vazio) nao apaga um erro local real.
+            if let pollDetail = poll.detail, !pollDetail.isEmpty {
                 detail = pollDetail
                 detailIsLocal = false
             } else if !detailIsLocal {
@@ -796,11 +810,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // Tooltip fresco junto (contexto/auto-start/contagem mudam com o
         // toggle); sondas fora da main, escrita de volta no main actor.
         guard let probe = runtimes.first(where: { $0.label == label }) else { return }
+        let epoch = mutationEpoch
         Task.detached(priority: .utility) { [weak self] in
             let tooltip = probe.tooltipInfo(state: state)
             await MainActor.run { [weak self] in
-                self?.runtimeInfo[label] = tooltip
-                self?.apply()
+                // Outra mutacao no meio: este texto ja e do estado anterior.
+                guard let self, self.mutationEpoch == epoch else { return }
+                self.runtimeInfo[label] = tooltip
+                self.apply()
             }
         }
     }
@@ -993,6 +1010,27 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(toggleController.runtimeStates["Colima"] == .running,
                "clique segue o rotulo exibido, nao uma releitura do estado")
 
+        // Toggle em voo: poll nao reescreve o estado do runtime.
+        toggleController.runtimeActivity["Colima"] = true
+        toggleController.absorb(poll: (.running, nil), runtimes: ["Colima": .stopped],
+                                sequence: toggleController.lastAppliedSequence + 1)
+        expect(toggleController.runtimeStates["Colima"] == .running,
+               "poll durante toggle nao faz a linha voltar ao estado anterior")
+        toggleController.runtimeActivity["Colima"] = nil
+
+        // Erro vindo de stderr: sem controle no titulo; vazio nao apaga erro local.
+        toggleController.detail = "falhou\u{1B}[31m\nlinha falsa"
+        toggleController.apply()
+        expect(!toggleController.errorItem.title.contains("\n")
+               && !toggleController.errorItem.title.contains("\u{1B}"),
+               "linha de erro sem caracteres de controle")
+        toggleController.detail = "Login: x"
+        toggleController.detailIsLocal = true
+        toggleController.absorb(poll: (.running, ""), sequence: toggleController.lastAppliedSequence + 1)
+        expect(toggleController.detail == "Login: x", "detalhe vazio do poll nao apaga erro local")
+        toggleController.detail = nil
+        toggleController.detailIsLocal = false
+
         // Tooltip do ponto: CLI ausente x CLI presente que nao respondeu.
         toggleController.state = .notInstalled
         toggleController.pathDisplay = nil
@@ -1054,15 +1092,20 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "lume detectado oferece habilitar o daemon")
 
         // Poll em voo: um segundo pedido no meio e descartado, nao enfileirado.
-        let applied = lumeController.lastAppliedSequence
-        lumeController.spawnPoll(sequence: applied + 10)
-        lumeController.spawnPoll(sequence: applied + 20)
-        let pollDeadline = Date().addingTimeInterval(5)
-        while Date() < pollDeadline && lumeController.pollInFlight {
+        // Pedidos no meio de um ciclo viram UM ciclo extra (rescan nao some),
+        // nunca uma fila.
+        lumeController.lastAppliedSequence = -1
+        lumeController.spawnPoll(sequence: lumeController.nextSequence())
+        lumeController.spawnPoll(sequence: lumeController.nextSequence())
+        lumeController.spawnPoll(sequence: lumeController.nextSequence())
+        expect(lumeController.pollPending, "pedido com ciclo em voo fica pendente")
+        let pollDeadline = Date().addingTimeInterval(8)
+        while Date() < pollDeadline && (lumeController.pollInFlight || lumeController.pollPending) {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
-        expect(!lumeController.pollInFlight && lumeController.lastAppliedSequence == applied + 10,
-               "poll em voo descarta o pedido seguinte em vez de enfileirar")
+        let issued = lumeController.sequenceLock.withLock { $0 }
+        expect(!lumeController.pollInFlight && lumeController.lastAppliedSequence == issued,
+               "pendente roda uma vez apos o ciclo em voo, sem fila")
 
         // Ordem: epoca e sequencia seguem descartando leituras velhas.
         let epochBefore = toggleController.mutationEpoch
