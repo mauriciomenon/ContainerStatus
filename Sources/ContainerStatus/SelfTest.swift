@@ -668,6 +668,17 @@ enum SelfTest {
         expect(RuntimeProbeConfig.dockerFamily.allSatisfy { probed.contains($0.label) },
                "familia docker inteira entra nas sondas padrao")
 
+        // Lima: "nome estado" por linha; ligado = alguma instancia Running.
+        let limaDirectory = temporary.appendingPathComponent("lima", isDirectory: true)
+        try FileManager.default.createDirectory(at: limaDirectory, withIntermediateDirectories: false)
+        _ = try stub("limactl", limaDirectory, stdout: "armbuild Stopped\ndefault Running", exitCode: 0)
+        let limaProbe = RuntimeProbe(config: .lima, directories: [limaDirectory.path])
+        expect(limaProbe.currentStatus().state == .running, "lima com instancia Running = ligado")
+        expect(limaProbe.currentInfo() == "instancias: armbuild Stopped, default Running",
+               "tooltip do lima lista todas as instancias")
+        _ = try stub("limactl", limaDirectory, stdout: "armbuild Stopped\nRunningVM Stopped", exitCode: 0)
+        expect(limaProbe.currentStatus().state == .stopped, "instancia parada com Running no nome nao engana")
+
         // Finch: vm status imprime Running / Stopped / Nonexistent.
         let finchDirectory = temporary.appendingPathComponent("finch", isDirectory: true)
         try FileManager.default.createDirectory(at: finchDirectory, withIntermediateDirectories: false)

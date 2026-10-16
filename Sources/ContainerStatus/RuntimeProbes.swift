@@ -103,7 +103,21 @@ extension RuntimeProbeConfig {
     /// Inclui toda a familia docker: receita fora desta lista nunca e
     /// sondada e o provider ficava escondido mesmo instalado.
     static let standard: [RuntimeProbeConfig] =
-        [.colima, .docker, .podman, .lume, .orbstack, .dockerDesktop, .rancherDesktop, .finch]
+        [.colima, .docker, .podman, .lume, .lima, .orbstack, .dockerDesktop, .rancherDesktop, .finch]
+
+    /// Lima (limactl): instancias VM sem servico unico, entao linha so
+    /// informativa; tooltip lista "nome estado" de cada uma. Ligado = alguma
+    /// instancia Running.
+    static let lima = RuntimeProbeConfig(
+        label: "Lima", binaryName: "limactl",
+        statusArguments: ["list", "--format", "{{.Name}} {{.Status}}"],
+        interpret: { result in
+            result.succeeded && result.stdout.split(separator: "\n").contains { $0.hasSuffix(" Running") }
+                ? .running : .stopped
+        },
+        info: RuntimeInfo(label: "instancias", arguments: ["list", "--format", "{{.Name}} {{.Status}}"]),
+        nature: "VMs Lima (limactl)"
+    )
 
     /// Providers do mesmo backbone docker: so entram no menu quando
     /// detectados. Cada um com toggle proprio quando e o dono do daemon.
@@ -457,10 +471,12 @@ final class RuntimeProbe: Sendable {
         guard let info = config.info, let path = resolvedPath() else { return nil }
         let result = ContainerCLI.runBinary(path, arguments: info.arguments,
                                             timeout: Self.statusTimeout)
-        let line = ContainerCLI.firstLine(result.stdout)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard result.succeeded, !line.isEmpty else { return nil }
-        return "\(info.label): \(line)"
+        // Ate 6 linhas (uma por instancia no Lima; o docker context e uma so).
+        let lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: true)
+            .map { ContainerCLI.menuSafe(String($0).trimmingCharacters(in: .whitespaces)) }
+        guard result.succeeded, !lines.isEmpty else { return nil }
+        let shown = lines.prefix(6).joined(separator: ", ")
+        return "\(info.label): \(shown)\(lines.count > 6 ? ", ..." : "")"
     }
 
     /// LaunchAgent de auto-start presente (primeiro padrao encontrado), ou

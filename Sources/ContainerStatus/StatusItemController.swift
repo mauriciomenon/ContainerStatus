@@ -84,6 +84,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let podmanActionItem = NSMenuItem()
     private let lumeRowItem = NSMenuItem()
     private let lumeDetectItem = NSMenuItem()
+    private let limaRowItem = NSMenuItem()
+    private let sepLima = NSMenuItem.separator()
     private let vmnetRowItem = NSMenuItem()
     private let vmnetActionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
@@ -453,6 +455,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         } else {
             place(lumeDetectItem, present: false)
         }
+
+        // ---- Lima (bloco proprio, somente leitura: instancias por nome) ----
+        let limaState = runtimeStates["Lima"] ?? .notInstalled
+        place(sepLima, present: limaState != .notInstalled)
+        if limaState != .notInstalled {
+            limaRowItem.title = "Lima: \(limaState == .running ? "Running" : "Not Running")"
+            limaRowItem.toolTip = runtimeInfo["Lima"]
+            limaRowItem.indentationLevel = 1
+            limaRowItem.isEnabled = false
+        }
+        place(limaRowItem, present: limaState != .notInstalled)
 
         // ---- VMware vmnet (bloco proprio, somente subir) ----
         let vmnetPresent = vmnetState != .notInstalled
@@ -1143,7 +1156,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .notInstalled], sequence: 1)
         expect(lumeController.lumeRowItem.menu == nil,
                "lume fora do menu sem deteccao")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .running], sequence: 2)
+        // Lima: bloco so aparece com limactl, linha informativa sem acao.
+        expect(lumeController.limaRowItem.menu == nil, "lima fora do menu sem deteccao")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped],
+                              info: ["Lima": "instancias: default Stopped"], sequence: 2)
+        expect(lumeController.limaRowItem.menu != nil && lumeController.limaRowItem.title == "Lima: Not Running"
+               && !lumeController.limaRowItem.isEnabled
+               && lumeController.limaRowItem.toolTip == "instancias: default Stopped",
+               "lima detectado mostra estado e instancias no tooltip")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .running], sequence: 3)
         expect(lumeController.podmanActionItem.menu != nil
                && lumeController.podmanActionItem.title == "Disable Daemon"
                && lumeController.podmanActionItem.action == #selector(runtimeToggled(_:))
@@ -1151,9 +1172,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                && lumeController.menu.index(of: lumeController.podmanActionItem)
                   == lumeController.menu.index(of: lumeController.podmanRowItem) + 1,
                "podman detectado mostra a acao logo abaixo da linha")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .notInstalled], sequence: 3)
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .notInstalled], sequence: 4)
         expect(lumeController.podmanActionItem.menu == nil, "podman sumido leva a acao junto")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 4)
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 5)
         expect(lumeController.lumeRowItem.menu != nil
                && lumeController.lumeDetectItem.title == "Enable Daemon",
                "lume detectado oferece habilitar o daemon")
