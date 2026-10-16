@@ -53,17 +53,22 @@ About                      Quit
 
 ## Politica de execucao e privilegios
 
-O app roda como o usuario logado, sem root, sem senha e sem pedido de
-autorizacao em momento algum. Nao possui helper privilegiado, daemon
-proprio, setuid ou entitlements especiais.
+O app roda como o usuario logado, sem root, helper privilegiado, daemon
+proprio, setuid ou entitlements especiais. Para o Apple container nunca
+pede senha nem autorizacao. Unica excecao em todo o app: "Enable Daemon"
+do VMware vmnet, que pede a senha de administrador do macOS (`osascript`,
+`do shell script ... with administrator privileges`) somente se o
+`vmnet-cli` e seu caminho forem do root, e o shell elevado confere a
+assinatura da VMware antes de executar.
 
 **De onde vem o direito de startar/parar o daemon:** o servico Apple
 container nao e um daemon de sistema. Ele vive no dominio launchd do
 proprio usuario (`gui/<uid>`), nos labels `com.apple.container.*`
 (apiserver, machine-apiserver, core-images, vmnet). Servicos desse dominio
 pertencem a sessao do usuario, e o dono da sessao pode inicia-los e
-interrompe-los sem elevacao. O app nunca fala com o launchd nem toca nos
-processos do servico: ele apenas executa a CLI oficial `container`
+interrompe-los sem elevacao. Para o Apple container o app nunca fala com o
+launchd nem toca nos processos do servico (o Lume e lido com `launchctl
+print`, somente leitura): ele apenas executa a CLI oficial `container`
 (instalada em `/usr/local/bin`, `root:wheel`, executavel por qualquer
 usuario), que faz o bootstrap/bootout no launchd do usuario. Qualquer
 trabalho que exija privilegio (por exemplo, rede via vmnet) e resolvido
@@ -129,8 +134,9 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 
 **Garantias:**
 
-- Nenhum comando passa por shell: os argumentos sao passados direto pela
-  API `Process`, sem interpolacao (nao existe superficie de injecao).
+- Nenhum comando passa por shell, exceto a subida do vmnet acima: os
+  argumentos vao direto pela API `Process`, sem interpolacao. No vmnet o
+  caminho e fixo e escapado para shell e AppleScript.
 - Ambiente minimo e fixo (`PATH` e `HOME`); o app nao herda o ambiente de
   quem o lancou, entao o comportamento e o mesmo no Terminal, no Finder e
   no login.
@@ -186,15 +192,14 @@ dimensoes explicitas de bitmap e independe da escala da tela.
 
 ## Testes focados
 
-`--selftest` executa 75 checagens do nucleo: estados, watchdog, parada
-lenta, descoberta da CLI, cache e concorrencia durante upgrades, sondas
-de runtimes externos e controle com stubs stateful.
-`--selftest-ui` inclui mais 35 checagens de menu: insercao, atualizacao e
-remocao da linha de erro, retencao de erro local de toggle apos polls
-saudaveis, substituicao por diagnostico do polling, ordem de checagens em
-voo (sequencia e epoca de mutacao), insercao com anchor degradado, ciclo
-de vida das linhas de runtime, toggles (incluindo leitura fresca e subida
-atrasada) e poll periodico vivo por multiplos ciclos. Exige uma sessao
+`--selftest` cobre o nucleo: estados, watchdog (SIGTERM ignorado, neto
+segurando o pipe, teto de saida), descoberta da CLI, cache e concorrencia
+durante upgrades, versao do servico, release do GitHub, sondas de runtimes
+externos e controle com stubs stateful, e o script do vmnet compilado.
+`--selftest-ui` inclui os testes de menu: ciclo de vida da linha de erro,
+retencao de erro local, ordem de checagens em voo (sequencia, epoca de
+mutacao e pedido pendente), blocos de runtime, toggles, avisos de
+atualizacao e de servico desatualizado. Exige uma sessao
 grafica do macOS; nao abre o menu nem altera o daemon, os runtimes ou o login.
 Os dois modos encerram o processo com codigo diferente de zero se falharem.
 
