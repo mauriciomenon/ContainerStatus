@@ -282,11 +282,12 @@ final class ContainerCLI: Sendable {
     func start() -> CLIRunResult {
         serviceLock.withLock { $0 = nil }
         let plain = run(["system", "start"], timeout: Self.mutationTimeout)
-        if plain.succeeded { return plain }
-        if plain.timedOut { return plain }
+        // Fallback so apos falha EXPLICITA (exit != 0): exit 0 com saida
+        // truncada ou pipe preso ja e start feito, e timeout deixa o
+        // bootstrap em andamento.
+        guard plain.spawned, !plain.timedOut, plain.exitCode != 0 else { return plain }
         let fallback = run(["system", "start", "--disable-kernel-install"], timeout: Self.mutationTimeout)
-        if fallback.succeeded { return fallback }
-        return plain.spawned ? plain : fallback
+        return fallback.exitedCleanly ? fallback : plain
     }
 
     /// Stops the whole service stack (apiserver, machine-apiserver,
@@ -496,8 +497,11 @@ final class ContainerCLI: Sendable {
                                 stderr: "tempo limite excedido (\(Int(timeout))s)")
         }
         if !ioCompleted {
+            // Saida incompleta: o exit vale para mutacoes, o stdout nao vale
+            // para parsers (stdout vazio viraria "0 containers").
             return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
-                                stderr: "saida nao disponivel: pipe mantido aberto por processo filho")
+                                stderr: "saida nao disponivel: pipe mantido aberto por processo filho",
+                                truncated: true)
         }
         return CLIRunResult(exitCode: process.terminationStatus, timedOut: false, spawned: true,
                             stderr: stderrBox.text, stdout: stdoutBox.text,

@@ -104,6 +104,8 @@ enum SelfTest {
         expect(!held.timedOut && held.exitCode == 0 && held.stderr.contains("pipe mantido aberto")
                && Date().timeIntervalSince(heldStart) < 3.5,
                "neto segurando o pipe nao trava a chamada")
+        expect(held.exitedCleanly && !held.succeeded,
+               "pipe preso: exit vale para mutacao, stdout nao vale para parser")
         let flood = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", "head -c 3000000 /dev/zero | tr '\\0' y"],
                                            timeout: 5)
         expect(!flood.succeeded && flood.truncated && flood.stdout.utf8.count == 1 << 20,
@@ -169,8 +171,8 @@ enum SelfTest {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 
-    private static func probeCount(for url: URL) throws -> Int {
-        try String(contentsOfFile: url.path + ".probes", encoding: .utf8).split(separator: "\n").count
+    private static func probeCount(for url: URL, suffix: String = ".probes") throws -> Int {
+        try String(contentsOfFile: url.path + suffix, encoding: .utf8).split(separator: "\n").count
     }
 
     private static func checkResolution(in temporary: URL, expect: (Bool, String) -> Void) throws {
@@ -308,6 +310,35 @@ enum SelfTest {
         let stopped = simulated.stop()
         expect(stopped.succeeded && Date().timeIntervalSince(started) >= 10,
                "parada simulada superior a 10s conclui sem watchdog")
+
+        // Fallback do start so apos falha explicita: exit 0 com saida acima
+        // do teto ja e start feito e nao pode rodar --disable-kernel-install.
+        let startDirectory = temporary.appendingPathComponent("start", isDirectory: true)
+        try FileManager.default.createDirectory(at: startDirectory, withIntermediateDirectories: false)
+        let startCLI = startDirectory.appendingPathComponent("container")
+        func writeStartCLI(exitCode: Int) throws {
+            let script = """
+            #!/bin/sh
+            if [ "$1" = system ] && [ "$2" = start ]; then
+              printf 's\\n' >> "$0.starts"
+              head -c 1200000 /dev/zero | tr '\\0' z
+              exit \(exitCode)
+            fi
+            """
+            try script.write(to: startCLI, atomically: false, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: startCLI.path)
+            try? FileManager.default.removeItem(atPath: startCLI.path + ".starts")
+        }
+        try writeStartCLI(exitCode: 0)
+        let starter = ContainerCLI(binaryPath: startCLI.path, directories: [])
+        let bigStart = starter.start()
+        let startsAfterSuccess = try probeCount(for: startCLI, suffix: ".starts")
+        expect(bigStart.exitedCleanly && bigStart.truncated && startsAfterSuccess == 1,
+               "start com exit 0 e saida truncada nao dispara o fallback")
+        try writeStartCLI(exitCode: 1)
+        _ = starter.start()
+        let startsAfterFailure = try probeCount(for: startCLI, suffix: ".starts")
+        expect(startsAfterFailure == 2, "start com exit 1 dispara o fallback")
 
         // Versao do servico (apiserver) x CLI: tabela de system version.
         let table = """
@@ -524,11 +555,11 @@ enum SelfTest {
         let podmanDirectory = temporary.appendingPathComponent("podman", isDirectory: true)
         try FileManager.default.createDirectory(at: podmanDirectory, withIntermediateDirectories: false)
         _ = try stub("podman", podmanDirectory,
-                 stdout: "[{\"Name\":\"pm\",\"Default\":true,\"Running\":true,\"Starting\":false}]", exitCode: 0)
+                 stdout: "[{\"Name\":\"podman-machine-default\",\"Default\":true,\"Running\":true,\"Starting\":false}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .running, "podman com maquina running = ligado")
         _ = try stub("podman", podmanDirectory,
-                 stdout: "[{\"Name\":\"pm\",\"Default\":true,\"Running\":false,\"Starting\":false}]", exitCode: 0)
+                 stdout: "[{\"Name\":\"podman-machine-default\",\"Default\":true,\"Running\":false,\"Starting\":false}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .stopped, "podman com maquina parada = desligado")
         _ = try stub("podman", podmanDirectory,
@@ -547,6 +578,14 @@ enum SelfTest {
                      stdout: "[{\"Name\":\"podman-machine-default*\",\"Default\":true,\"Running\":true}]", exitCode: 0)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
             .currentStatus().state == .running, "podman-machine-default marcada com * e reconhecida")
+        _ = try stub("podman", podmanDirectory,
+                     stdout: "[{\"Name\":\"podman-machine-default2\",\"Running\":true},"
+                        + "{\"Name\":\"podman-machine-default\",\"Running\":false}]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .stopped, "nome parecido (prefixo) nao conta como o alvo")
+        _ = try stub("podman", podmanDirectory, stdout: "[{\"Name\":\"dev\",\"Running\":true}]", exitCode: 0)
+        expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path])
+            .currentStatus().state == .stopped, "sem a maquina alvo, outra VM nao decide o estado")
         let writablePodman = try stub("podman", podmanDirectory, stdout: "[]", exitCode: 0)
         try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: writablePodman)
         expect(RuntimeProbe(config: .podman, directories: [podmanDirectory.path]).resolvedPath() == nil,

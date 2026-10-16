@@ -150,7 +150,7 @@ extension RuntimeProbeConfig {
     )
 
     /// Alvo de `podman machine start/stop` sem nome (docs do podman). A
-    /// lista pode marcar com "*" a conexao padrao no Name, dai o prefixo.
+    /// lista pode marcar com "*" a conexao padrao no Name.
     static let podmanControlledMachine = "podman-machine-default"
 
     static func podmanState(_ result: CLIRunResult) -> ExternalRuntimeState {
@@ -159,11 +159,13 @@ extension RuntimeProbeConfig {
         else { return .stopped }
         // `machine start/stop` sem nome agem em podman-machine-default; o
         // campo Default da lista e a CONEXAO padrao, que pode ser outra. O
-        // estado e o dessa maquina; sem ela, start/stop sem nome nem tem alvo
-        // e a linha so informa se alguma VM roda.
-        let controlled = machines.filter { ($0["Name"] as? String)?.hasPrefix(podmanControlledMachine) == true }
-        let watched = controlled.isEmpty ? machines : controlled
-        return watched.contains { $0["Running"] as? Bool == true } ? .running : .stopped
+        // estado e so o dessa maquina (nome exato, com o "*" opcional da
+        // conexao padrao): outra VM ligada nunca vira "Disable Daemon" sobre ela.
+        let target = machines.first {
+            let name = $0["Name"] as? String
+            return name == podmanControlledMachine || name == podmanControlledMachine + "*"
+        }
+        return target?["Running"] as? Bool == true ? .running : .stopped
     }
 
     /// O toggle controla o servidor `lume serve` (servico brew), entao o

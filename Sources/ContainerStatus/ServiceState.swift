@@ -38,5 +38,9 @@ struct CLIRunResult: Sendable {
     /// podem ser lidos como resposta valida.
     var truncated: Bool = false
 
-    var succeeded: Bool { spawned && !timedOut && !truncated && exitCode == 0 }
+    /// O processo terminou com exit 0 dentro do prazo. Vale para mutacoes
+    /// (start/stop/toggle): saida grande ou incompleta nao desfaz um start.
+    var exitedCleanly: Bool { spawned && !timedOut && exitCode == 0 }
+    /// exitedCleanly E saida completa: exigido por quem interpreta stdout.
+    var succeeded: Bool { exitedCleanly && !truncated }
 }

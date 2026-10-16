@@ -685,7 +685,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             containerItems = containers
             containerCount = containers.count
         }
-        if result.succeeded {
+        if result.exitedCleanly {
             detail = poll.detail
             detailIsLocal = false
         } else {
@@ -718,7 +718,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             // (ex.: open -a do OrbStack e imediato, o app ainda nao responde);
             // sondar com retry curto antes de decidir o estado final.
             var state = probe.currentStatus().state
-            if result.succeeded {
+            if result.exitedCleanly {
                 let expected: ExternalRuntimeState = turningOff ? .stopped : .running
                 var attempts = 0
                 while state != expected && attempts < 3 {
@@ -779,7 +779,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         self.vmCount = vmCount
         // Cancelar o dialogo de senha nao e falha: sai silencioso.
         let canceled = result.stderr.contains("(-128)")  // osascript: exit 1, erro -128
-        if result.succeeded || canceled {
+        if result.exitedCleanly || canceled {
             detail = nil
             detailIsLocal = false
         } else {
@@ -798,7 +798,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         mutationEpoch += 1
         runtimeActivity[label] = nil
         runtimeStates[label] = state
-        if result.succeeded {
+        if result.exitedCleanly {
             detail = nil
             detailIsLocal = false
         } else {
