@@ -105,7 +105,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.minimumViewWidth, height: 26))
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -133,7 +133,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let stack = NSStackView(views: [label, NSView(), rescanButton])
         stack.orientation = .horizontal
         stack.spacing = 8
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.minimumViewWidth, height: 26))
         stack.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -167,10 +167,39 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         item.button?.image = Self.dotImage(state: state, dimmed: false)
     }
 
+    /// Diagnostico (--dump-menu): um poll real, sem mostrar o item, e imprime
+    /// o menu como o usuario o veria, com a largura calculada pelo AppKit.
+    static func dumpMenuAndExit() -> Never {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let controller = StatusItemController()
+        controller.item.isVisible = false
+        controller.refreshNow()
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline && controller.lastAppliedSequence < 1 {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        controller.menuNeedsUpdate(controller.menu)
+        for item in controller.menu.items {
+            if item.isSeparatorItem { print("-----"); continue }
+            let text = item.view != nil ? "[view \(Int(item.view?.frame.width ?? 0))pt]" : item.title
+            let pad = String(repeating: "  ", count: item.indentationLevel)
+            print("\(pad)\(text.replacingOccurrences(of: "\n", with: " / "))\(item.isEnabled ? "" : "  (desabilitado)")")
+        }
+        print("largura do menu: \(Int(controller.menu.size.width))pt")
+        exit(0)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         startPolling()
         refreshNow()
         startUpstreamChecks()
+    }
+
+    /// Reabrir o app ja em execucao (Finder, Spotlight, `open`) nao mostrava
+    /// nada: sem janela nem Dock, parecia que "nao abriu". Agora abre o menu.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        item.button?.performClick(nil)
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -643,12 +672,25 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         apply()
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        loginStatusCache = Self.loginStatus
-        // Itens de view acompanham a largura do menu aberto.
-        let width = max(200, menu.size.width - 18)
+    /// Largura que cabecalho e rodape pedem sozinhos; a largura fixa de 260pt
+    /// era o que alargava o menu, nenhum item de texto chegava perto.
+    private static let minimumViewWidth: CGFloat = 150
+
+    /// Views no minimo que o conteudo pede; depois esticam ate o item de
+    /// texto mais largo, para cabecalho/rodape alinharem com o resto.
+    private func fitMenuWidth() {
+        for view in [headerView, footerView] {
+            let fitting = view.subviews.first?.fittingSize.width ?? 0
+            view.frame.size.width = max(Self.minimumViewWidth, fitting + 32)
+        }
+        let width = max(headerView.frame.width, footerView.frame.width, menu.size.width - 18)
         headerView.frame.size.width = width
         footerView.frame.size.width = width
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        loginStatusCache = Self.loginStatus
+        fitMenuWidth()
         refreshNow()
         if activity == .none { apply() }
     }
@@ -871,6 +913,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "cabecalho tem botao de varedura ao lado do titulo")
         expect(controller.footerItem.view != nil,
                "rodape About/Quit em item de view")
+        controller.fitMenuWidth()
+        expect(controller.menu.size.width < 230,
+               "menu estreito: largura segue o conteudo (\(Int(controller.menu.size.width))pt), nao 260pt fixos")
+        expect(controller.headerView.frame.width == controller.footerView.frame.width,
+               "cabecalho e rodape com a mesma largura")
 
         // Bloco Apple: estado, linhas de container com memoria, acao.
         let listTwo = [ContainerCLI.ContainerSummary(id: "web", memoryBytes: 2_147_483_648),

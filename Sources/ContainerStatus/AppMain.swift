@@ -7,6 +7,9 @@ import ServiceManagement
 struct AppMain {
     @MainActor
     static func main() {
+        if CommandLine.arguments.contains("--dump-menu") {
+            StatusItemController.dumpMenuAndExit()
+        }
         if CommandLine.arguments.contains("--probe-runtimes") {
             Self.probeRuntimesAndExit()
         }
