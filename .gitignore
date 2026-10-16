@@ -33,3 +33,7 @@ build/
 docs/
 ROADMAP.md
 agents.md
+
+# Estado local de ferramentas de IA (regra 9: nunca publicar)
+.clawness/
+.video_agent/
