@@ -113,11 +113,13 @@ enum SelfTest {
         try? "#!/bin/sh\ntrap '' TERM HUP\nwhile :; do /bin/sleep 1; done\n"
             .write(toFile: treeBinary, atomically: false, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: treeBinary)
-        defer { try? FileManager.default.removeItem(atPath: treeBinary) }
         let treeMarker = URL(fileURLWithPath: treeBinary).lastPathComponent
+        /// -1 quando o pgrep falha: so exit 0 (achou) ou 1 (nada) contam,
+        /// senao uma falha da consulta passaria por "zero sobreviventes".
         func markedCount() -> Int {
             let found = ContainerCLI.runBinary("/usr/bin/pgrep", arguments: ["-f", treeMarker], timeout: 2)
-            return found.stdout.split(separator: "\n").count
+            guard found.spawned, !found.timedOut, found.exitCode == 0 || found.exitCode == 1 else { return -1 }
+            return found.exitCode == 1 ? 0 : found.stdout.split(separator: "\n").count
         }
         let treeDone = DispatchSemaphore(value: 0)
         let treeBox = OSAllocatedUnfairLock<CLIRunResult?>(initialState: nil)
@@ -132,6 +134,8 @@ enum SelfTest {
         _ = treeDone.wait(timeout: .now() + 10)
         Thread.sleep(forTimeInterval: 0.3)
         let aliveAfter = markedCount()
+        // Limpeza explicita: o selftest termina com exit(), defer nao rodaria.
+        try? FileManager.default.removeItem(atPath: treeBinary)
         expect(treeBox.withLock({ $0 })?.timedOut == true && aliveDuring >= 2 && aliveAfter == 0,
                "timeout encerra a arvore toda (vivos durante: \(aliveDuring), depois: \(aliveAfter))")
 

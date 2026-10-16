@@ -525,12 +525,12 @@ final class ContainerCLI: Sendable {
     /// Filhos, netos etc. de pid (proc_listchildpids), mais fundos primeiro.
     /// Travessia completa: o buffer e dimensionado pela contagem que o kernel
     /// informa (com folga para filhos novos), sem teto fixo por pai. O
-    /// conjunto `seen` impede laco; o limite global so existe contra loucura.
+    /// conjunto `seen` impede laco, entao a travessia sempre termina.
     static func descendants(of pid: pid_t) -> [pid_t] {
         var found: [pid_t] = []
         var seen: Set<pid_t> = [pid]
         var pending = [pid]
-        while let current = pending.popLast(), found.count < 8192 {
+        while let current = pending.popLast() {
             let estimate = max(0, Int(proc_listchildpids(current, nil, 0)))
             guard estimate > 0 else { continue }
             var buffer = [pid_t](repeating: 0, count: estimate + 32)

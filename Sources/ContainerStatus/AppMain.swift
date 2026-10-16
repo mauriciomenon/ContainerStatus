@@ -40,7 +40,8 @@ struct AppMain {
     @MainActor
     static func probeRuntimesAndExit() -> Never {
         for probe in RuntimeProbeConfig.standard.map({ RuntimeProbe(config: $0) }) {
-            let (runtimeState, path) = probe.currentStatus()
+            let status = probe.statusWithResult()
+            let (runtimeState, path) = (status.state, status.path)
             let label: String
             switch runtimeState {
             case .notInstalled: label = "nao instalado"
@@ -48,7 +49,8 @@ struct AppMain {
             case .stopped: label = "desligado"
             }
             var line = "\(probe.label): \(label)\(path.map { " (\($0))" } ?? "")"
-            if runtimeState != .notInstalled, let tooltip = probe.tooltipInfo(state: runtimeState) {
+            if runtimeState != .notInstalled,
+               let tooltip = probe.tooltipInfo(state: runtimeState, statusResult: status.result) {
                 line += " [\(tooltip)]"
             }
             print(line)
