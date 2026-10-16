@@ -9,7 +9,9 @@ controla o servico Apple `container` (github.com/apple/container).
   **Cinza vazado**: CLI `container` indisponivel (nao instalada ou travada).
   Durante um toggle o dot fica esmaecido e o poll nao sobrescreve o estado
   (sem piscar no meio da transicao).
-- Clique abre o menu, nesta ordem:
+- Clique abre o menu. Abrir o app de novo (Finder, Spotlight, `open`) com
+  ele ja rodando tambem abre o menu. A largura segue o conteudo (~190pt).
+  O menu, nesta ordem:
 
 ```
 Container Status x.y.z        ⟳   rescan: CLI, sondas e release no GitHub
@@ -31,6 +33,7 @@ Apple Container x.y.z            versao da CLI em uso; "(running a.b.c,
 -----------------------------    blocos abaixo so quando detectados
   Podman: ...  + Enable/Disable Daemon
   Lume: ...    + Enable/Disable Daemon (servico brew lume serve)
+  Lima: ...    somente leitura; tooltip lista "nome estado" das instancias
   VMware vmnet: Running - 1 VM + Enable Daemon (senha de admin; sem desligar)
 -----------------------------
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
@@ -135,6 +138,11 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 
 **Garantias:**
 
+- Nenhum processo fica para tras: cada CLI e esperada ate o fim (watchdog
+  com SIGTERM/SIGKILL e prazo), a leitura da saida e cancelavel e um ciclo
+  de poll por vez. Medido no app instalado: 0 filhos entre ciclos, fds
+  estaveis, RSS sem crescimento e `leaks` constante (so alocacoes de
+  frameworks do sistema na partida, nenhuma do app).
 - Nenhum comando passa por shell, exceto a subida do vmnet acima: os
   argumentos vao direto pela API `Process`, sem interpolacao. No vmnet o
   caminho e fixo e escapado para shell e AppleScript.
@@ -167,6 +175,8 @@ a descoberta da CLI nao depende de onde o app esta instalado.
 swift build                              # build de desenvolvimento
 .build/debug/ContainerStatus --selftest  # autoteste do nucleo e regressoes
 .build/debug/ContainerStatus --selftest-ui # inclui os testes de menu AppKit
+.build/debug/ContainerStatus --probe-runtimes # diagnostico: sondas, vmnet e release do GitHub
+.build/debug/ContainerStatus --dump-menu # diagnostico: menu real apos um poll e sua largura
 Scripts/compile_and_run.sh               # empacota ContainerStatus.app e abre
 Scripts/compile_and_run.sh --test        # valida antes de empacotar e abrir
 Scripts/make_icon.sh                     # regenera Icon.icns de 16 a 1024 pixels
@@ -278,7 +288,7 @@ Sources/ContainerStatus/
   AppMain.swift              bootstrap NSApplication (accessory) e autotestes
   ServiceState.swift         enum de estado + mapeamento de codigo de saida
   ContainerCLI.swift         wrapper da CLI com watchdog e ambiente explicito
-  RuntimeProbes.swift        sondas Docker/Podman/Lume/OrbStack/Finch e vmnet
+  RuntimeProbes.swift        sondas Docker/Podman/Lume/Lima/OrbStack/Finch e vmnet
   UpstreamRelease.swift      ultima release do apple/container no GitHub
   SelfTest.swift             checagens do nucleo e entrada dos testes de menu
   StatusItemController.swift NSStatusItem, menu, maquina de estados, polling

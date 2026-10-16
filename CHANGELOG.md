@@ -4,6 +4,22 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-16
+
+### Corrigido
+- O ponto da barra nascia depois do relogio, quase invisivel ("o app nao
+  abre"): status item com nome de posicao estavel.
+- Reabrir o app ja em execucao nao mostrava nada; agora abre o menu.
+- Menu mais estreito: ~190pt em vez de 260pt fixos.
+
+### Adicionado
+- Lima (limactl) detectado, com as instancias no tooltip.
+- `--dump-menu`: imprime o menu real e sua largura apos um poll.
+
+### Alterado
+- Checagem a cada 15s com o menu fechado e 3s com ele aberto (~5x menos
+  processos curtos).
+
 ## [1.1.0] - 2026-10-16
 
 ### Adicionado
