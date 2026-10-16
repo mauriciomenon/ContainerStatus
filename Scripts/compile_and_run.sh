@@ -45,10 +45,15 @@ fi
 log "==> package app"
 SIGNING_MODE=adhoc ARCHES="${ARCHES_VALUE}" "${ROOT_DIR}/Scripts/package_app.sh" release
 
+# Caminhos viram regex de pgrep/pkill: escapar os metacaracteres ('.' de
+# .build e de .app casava qualquer caractere) e ancorar o fim do executavel.
+re_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g'; }
+APP_PROCESS_REGEX="/$(re_escape "${APP_PROCESS_PATTERN}")\$"
+
 log "==> Killing existing ${APP_NAME} instances"
-pkill -f "/${APP_PROCESS_PATTERN}\$" 2>/dev/null || true
-pkill -f "^${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
-pkill -f "^${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
+pkill -f "${APP_PROCESS_REGEX}" 2>/dev/null || true
+pkill -f "^$(re_escape "${DEBUG_PROCESS_PATTERN}")\$" 2>/dev/null || true
+pkill -f "^$(re_escape "${RELEASE_PROCESS_PATTERN}")\$" 2>/dev/null || true
 pkill -x "${APP_NAME}" 2>/dev/null || true
 
 log "==> launch app"
@@ -59,7 +64,7 @@ if ! open "${APP_BUNDLE}"; then
 fi
 
 for _ in {1..10}; do
-  if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
+  if pgrep -f "${APP_PROCESS_REGEX}" >/dev/null 2>&1; then
     log "OK: ${APP_NAME} is running."
     exit 0
   fi

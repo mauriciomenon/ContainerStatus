@@ -85,8 +85,19 @@ swift build "${BUILD_ARGS[@]}"
 BUILD_DIR="$(swift build "${BUILD_ARGS[@]}" --show-bin-path)"
 verify_binary_arches "$BUILD_DIR/$APP_NAME" "${ARCH_LIST[@]}"
 
-APP="$ROOT/${APP_NAME}.app"
-rm -rf "$APP"
+for value in "$MARKETING_VERSION" "$MACOS_MIN_VERSION"; do
+  if [[ ! "$value" =~ ^[0-9]+(\.[0-9]+){0,3}([+-][0-9A-Za-z.-]+)?$ ]]; then
+    echo "Invalid MARKETING_VERSION/MACOS_MIN_VERSION: $value" >&2
+    exit 1
+  fi
+done
+
+# Monta e assina em area de staging; o bundle anterior so e trocado no fim,
+# entao uma falha no meio deixa o ContainerStatus.app antigo intacto.
+FINAL_APP="$ROOT/${APP_NAME}.app"
+STAGING_DIR="$ROOT/.build/staging"
+APP="$STAGING_DIR/${APP_NAME}.app"
+rm -rf "$STAGING_DIR"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 ICON_TARGET="$ROOT/Icon.icns"
 
@@ -143,5 +154,9 @@ else
 fi
 
 codesign "${CODESIGN_ARGS[@]}" "$APP"
+codesign --verify --strict "$APP"
 
-echo "Created $APP"
+rm -rf "$FINAL_APP"
+mv "$APP" "$FINAL_APP"
+rm -rf "$STAGING_DIR"
+echo "Created $FINAL_APP"

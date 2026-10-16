@@ -12,6 +12,12 @@ if [[ ! -d "$APP_PATH" ]]; then
     echo "Run ./Scripts/package_app.sh first to build the app"
     exit 1
 fi
+# Diretorio existir nao basta: bundle incompleto ou com assinatura quebrada
+# nao abre, e a instancia em uso ja teria sido encerrada.
+if ! codesign --verify --strict "$APP_PATH" 2>/dev/null; then
+    echo "ERROR: ${APP_NAME}.app at $APP_PATH is incomplete or has an invalid signature"
+    exit 1
+fi
 
 echo "==> Killing existing ${APP_NAME} instances"
 # -x compara o nome exato; -f "<nome>.app" casava qualquer linha de comando
