@@ -10,8 +10,13 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
   mais espalhadas no menu principal.
 - Rodape em linhas proprias: Refresh (antes o botao do cabecalho), About
   e Quit na ultima linha. About virou submenu com o painel do app e os
-  links do GitHub de Apple Container, OrbStack, Lima e Lume (o item GitHub
-  saiu do bloco Apple).
+  links do GitHub de Apple Container, Docker, OrbStack, Rancher Desktop,
+  Podman, Podman Desktop, Lume e Lima (o item GitHub saiu do bloco Apple).
+- Versao da CLI, aviso de restart e caminho resolvido foram para o About;
+  o bloco Apple comeca em "Apple Container" e linhas informativas usam a
+  cor normal (cinza so em acao desabilitada).
+- Menu mais compacto: linhas de 19pt e so tres separadores (399pt -> 271pt
+  de altura no mesmo estado).
 
 ## [1.1.1] - 2026-10-16
 

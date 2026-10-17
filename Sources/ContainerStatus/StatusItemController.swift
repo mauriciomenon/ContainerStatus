@@ -84,7 +84,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let lumeRowItem = NSMenuItem()
     private let lumeDetectItem = NSMenuItem()
     private let limaRowItem = NSMenuItem()
-    private let sepLima = NSMenuItem.separator()
     private let vmnetRowItem = NSMenuItem()
     private let vmnetActionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
@@ -92,26 +91,31 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// na ultima linha.
     private let aboutItem = NSMenuItem()
     private let quitItem = NSMenuItem()
-    private let footerSep = NSMenuItem.separator()
-    /// Links do submenu About, na ordem exibida.
+    /// Versao da CLI (e aviso de restart) no submenu About, acima do caminho.
+    private let appleInfoItem = NSMenuItem()
+    /// Links do submenu About, na ordem exibida: Apple Container no grupo
+    /// dele, depois os runtimes na ordem do menu (familia Docker, Podman,
+    /// Lume, Lima).
     static let projectLinks: [(title: String, url: URL)] = [
         ("Apple Container on GitHub", projectURL),
+        ("Docker on GitHub", URL(string: "https://github.com/docker")!),
         ("OrbStack on GitHub", URL(string: "https://github.com/orbstack/orbstack")!),
-        ("Lima on GitHub", URL(string: "https://github.com/lima-vm/lima")!),
+        ("Rancher Desktop on GitHub", URL(string: "https://github.com/rancher-sandbox/rancher-desktop")!),
+        ("Podman on GitHub", URL(string: "https://github.com/podman-container-tools/podman")!),
+        ("Podman Desktop on GitHub", URL(string: "https://github.com/podman-desktop/podman-desktop")!),
         ("Lume on GitHub", URL(string: "https://github.com/trycua/cua/tree/main/libs/lume")!),
+        ("Lima on GitHub", URL(string: "https://github.com/lima-vm/lima")!),
     ]
     /// Linhas de informacao (cache do poll) de cada submenu de runtime,
     /// reaproveitadas para o submenu aberto nao piscar a cada poll.
     private var infoItemPools: [String: [NSMenuItem]] = [:]
     private var infoSeparators: [String: NSMenuItem] = [:]
+    static let compactFont = NSFont.menuFont(ofSize: 12)
     /// Cabecalho: titulo em negrito, linha de texto comum (sem view).
     private let headerItem = NSMenuItem()
     /// Varedura ativa (rescan da CLI + poll + release), linha do rodape.
     private let refreshItem = NSMenuItem()
     private let sepDocker = NSMenuItem.separator()
-    private let sepPodman = NSMenuItem.separator()
-    private let sepLume = NSMenuItem.separator()
-    private let sepVmnet = NSMenuItem.separator()
     private let tailSep = NSMenuItem.separator()
     private let firstSep = NSMenuItem.separator()
 
@@ -163,7 +167,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             for item in items {
                 let lead = String(repeating: "      ", count: depth)
                 if item.isSeparatorItem { print("\(lead)-----"); continue }
-                let text = item.view != nil ? "[view \(Int(item.view?.frame.width ?? 0))pt]" : item.title
+                let text = item.title
                 let pad = lead + String(repeating: "  ", count: item.indentationLevel)
                 let marks = (item.submenu != nil ? "  >" : "") + (item.isEnabled ? "" : "  (desabilitado)")
                 print("\(pad)\(text.replacingOccurrences(of: "\n", with: " / "))\(marks)")
@@ -171,7 +175,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
         dump(controller.menu.items, depth: 0)
-        print("largura do menu: \(Int(controller.menu.size.width))pt")
+        print("largura do menu: \(Int(controller.menu.size.width))pt, altura: \(Int(controller.menu.size.height))pt")
         exit(0)
     }
 
@@ -214,6 +218,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private func buildMenu() {
         menu.autoenablesItems = false
         menu.delegate = self
+        // A altura da linha segue a fonte: 12pt deixa o menu mais compacto
+        // que o padrao do sistema (13pt + respiro do macOS 26).
+        menu.font = Self.compactFont
 
         appleRowItem.isEnabled = false
         statusLineItem.isEnabled = false
@@ -251,16 +258,20 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         let aboutMenu = NSMenu()
         aboutMenu.autoenablesItems = false
+        aboutMenu.font = Self.compactFont
         let panelItem = NSMenuItem(title: "About ContainerStatus \(appVersion ?? "")",
                                    action: #selector(showAbout(_:)), keyEquivalent: "")
         panelItem.target = self
         aboutMenu.addItem(panelItem)
         aboutMenu.addItem(.separator())
-        for link in Self.projectLinks {
+        appleInfoItem.isEnabled = false
+        aboutMenu.addItem(appleInfoItem)  // caminho da CLI entra logo abaixo (apply)
+        for (index, link) in Self.projectLinks.enumerated() {
             let linkItem = NSMenuItem(title: link.title, action: #selector(openLink(_:)), keyEquivalent: "")
             linkItem.target = self
             linkItem.representedObject = link.url
             aboutMenu.addItem(linkItem)
+            if index == 0 { aboutMenu.addItem(.separator()) }  // fecha o grupo Apple
         }
         aboutItem.title = "About"
         aboutItem.submenu = aboutMenu
@@ -273,7 +284,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         refreshItem.action = #selector(refreshClicked(_:))
         headerItem.attributedTitle = NSAttributedString(
             string: "Container Status \(appVersion ?? "")",
-            attributes: [.font: NSFont.boldSystemFont(ofSize: 13), .foregroundColor: NSColor.labelColor])
+            attributes: [.font: NSFont.boldSystemFont(ofSize: 12), .foregroundColor: NSColor.labelColor])
         headerItem.isEnabled = false
 
         rebuildMenu()
@@ -286,7 +297,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         menu.removeAllItems()
         menu.addItem(headerItem)
         menu.addItem(firstSep)
-        menu.addItem(footerSep)
         menu.addItem(refreshItem)
         menu.addItem(aboutItem)
         menu.addItem(quitItem)
@@ -338,6 +348,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let submenu = row.submenu ?? {
             let created = NSMenu()
             created.autoenablesItems = false
+            created.font = Self.compactFont
             row.submenu = created
             return created
         }()
@@ -366,8 +377,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
 
-        // ---- Bloco Apple Container ----
+        // ---- Bloco Apple Container (versao e caminho ficam no About) ----
         place(appleRowItem, present: true)
+        appleRowItem.title = "Apple Container"
         if let pathDisplay {
             // Long symlink chains break in two: resolved path on top,
             // "via <symlink>" underneath.
@@ -382,7 +394,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             pathItem.indentationLevel = 1
             pathItem.isEnabled = false
         }
-        place(pathItem, present: pathDisplay != nil)
+        if let aboutMenu = aboutItem.submenu {
+            if pathDisplay != nil, pathItem.menu == nil {
+                aboutMenu.insertItem(pathItem, at: aboutMenu.index(of: appleInfoItem) + 1)
+            } else if pathDisplay == nil {
+                pathItem.menu?.removeItem(pathItem)
+            }
+        }
         place(statusLineItem, present: true)
 
         // Linhas dos containers de pe: id e memoria. Pool reutilizado.
@@ -464,7 +482,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // ---- Podman (bloco proprio) ----
         let podmanState = runtimeStates["Podman"] ?? .notInstalled
-        place(sepPodman, present: podmanState != .notInstalled)
         place(podmanRowItem, present: podmanState != .notInstalled)
         if podmanState != .notInstalled {
             podmanRowItem.title = "Podman: \(podmanState == .running ? "Running" : "Not Running")"
@@ -483,7 +500,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // ---- Lume (linha com submenu: acao do daemon + informacao) ----
         let lumeState = runtimeStates["Lume"] ?? .notInstalled
-        place(sepLume, present: lumeState != .notInstalled)
         place(lumeRowItem, present: lumeState != .notInstalled)
         if lumeState != .notInstalled {
             lumeRowItem.title = "Lume: \(lumeState == .running ? "Running" : "Not Running")"
@@ -504,7 +520,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // ---- Lima (linha com submenu somente leitura: instancias) ----
         let limaState = runtimeStates["Lima"] ?? .notInstalled
-        place(sepLima, present: limaState != .notInstalled)
         if limaState != .notInstalled {
             limaRowItem.title = "Lima: \(limaState == .running ? "Running" : "Not Running")"
             limaRowItem.toolTip = runtimeInfo["Lima"]
@@ -515,7 +530,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // ---- VMware vmnet (bloco proprio, somente subir) ----
         let vmnetPresent = vmnetState != .notInstalled
-        place(sepVmnet, present: vmnetPresent)
         place(vmnetRowItem, present: vmnetPresent)
         if vmnetPresent {
             var text = vmnetState == .running ? "VMware vmnet: Running" : "VMware vmnet: Not Running"
@@ -573,7 +587,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if state == .running, let serviceVersion, let cliVersion, serviceVersion != cliVersion {
             staleService = serviceVersion
         }
-        appleRowItem.title = "Apple Container\(versionSuffix)"
+        appleInfoItem.title = (pathDisplay == nil ? "Apple Container: CLI not found" : "Apple Container\(versionSuffix)")
             + (staleService.map { " (running \($0), restart to update)" } ?? "")
 
         statusLineItem.title = activity != .none
@@ -583,6 +597,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         loginItem.title = "Open at Login"
         loginItem.state = loginStatusCache == .enabled ? .on : .off
         loginItem.isEnabled = true
+        // Por ultimo: as linhas desenham o estado final do item.
+        CompactMenuRow.install(in: menu)
     }
 
     private func statusSuffix() -> String {
@@ -952,23 +968,50 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.headerItem.menu != nil && controller.loginItem.menu != nil,
                "cabecalho e login fixos no menu")
         let count = menu.numberOfItems
-        expect(count >= 4 && menu.items[count - 1] === controller.quitItem
+        expect(count >= 5 && menu.items[count - 1] === controller.quitItem
                && menu.items[count - 2] === controller.aboutItem
                && menu.items[count - 3] === controller.refreshItem
-               && menu.items[count - 4].isSeparatorItem
-               && menu.items[count - 5] === controller.loginItem,
-               "rodape: login | sep | Refresh | About | Quit na ultima linha")
-        expect(menu.items.allSatisfy { $0.view == nil },
-               "nenhum item de view: cabecalho, refresh e rodape sao linhas de texto")
+               && menu.items[count - 4] === controller.loginItem
+               && menu.items[count - 5].isSeparatorItem,
+               "rodape: sep | login | Refresh | About | Quit na ultima linha")
+        expect(menu.items.filter(\.isSeparatorItem).count == 3,
+               "so tres separadores: titulo, bloco Apple e rodape")
+        let compactRows = menu.items.filter { !$0.isSeparatorItem }
+            + (controller.aboutItem.submenu?.items.filter { !$0.isSeparatorItem } ?? [])
+        expect(compactRows.allSatisfy { ($0.view as? CompactMenuRow)?.frame.height == CompactMenuRow.rowHeight },
+               "todas as linhas compactas (\(CompactMenuRow.rowHeight)pt), submenu About incluso")
+        controller.pathDisplay = "/opt/homebrew/Cellar/container/1.5.0/bin/container via /usr/local/bin/container"
+        controller.apply()
+        let aboutMenu = controller.aboutItem.submenu
+        expect((controller.pathItem.view?.frame.height ?? 0) > CompactMenuRow.rowHeight,
+               "caminho em duas linhas ganha altura, sem cortar o texto")
+        expect(controller.pathItem.menu === aboutMenu
+               && aboutMenu?.index(of: controller.pathItem) == (aboutMenu?.index(of: controller.appleInfoItem) ?? -9) + 1,
+               "caminho da CLI no About, logo abaixo da versao")
+        controller.pathDisplay = nil
+        controller.apply()
+        CompactMenuRow.checkClick(expect: expect)
         expect(controller.quitItem.action == #selector(quitClicked(_:))
                && controller.refreshItem.action == #selector(refreshClicked(_:)),
                "Quit e Refresh ligados as acoes")
-        let aboutEntries = controller.aboutItem.submenu?.items.filter { !$0.isSeparatorItem } ?? []
+        let aboutEntries = aboutMenu?.items.filter { !$0.isSeparatorItem } ?? []
+        let linkEntries = aboutEntries.filter { $0.action == #selector(openLink(_:)) }
         expect(aboutEntries.first?.action == #selector(showAbout(_:))
-               && aboutEntries.dropFirst().map { $0.representedObject as? URL }
-                  == StatusItemController.projectLinks.map { $0.url }
-               && aboutEntries.dropFirst().allSatisfy { $0.action == #selector(openLink(_:)) },
-               "submenu About: painel e links de Apple Container, OrbStack, Lima, Lume")
+               && aboutEntries.dropFirst().first === controller.appleInfoItem
+               && linkEntries.map { $0.representedObject as? URL } == StatusItemController.projectLinks.map { $0.url }
+               && linkEntries.count == 8,
+               "submenu About: painel, versao da CLI e links de Apple Container e dos runtimes")
+        // Cor: informativa (sem acao) normal; acao desabilitada cinza.
+        func color(_ item: NSMenuItem) -> NSColor? {
+            (item.view as? CompactMenuRow)?.title.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        }
+        expect(color(controller.appleRowItem) == .labelColor && color(controller.statusLineItem) == .labelColor,
+               "Apple Container e Status em cor normal")
+        controller.activity = .starting
+        controller.apply()
+        expect(color(controller.actionItem) == .disabledControlTextColor, "acao desabilitada (Working...) em cinza")
+        controller.activity = .none
+        controller.apply()
         expect(controller.appleRowItem.menu != nil && controller.dockerRowItem.menu != nil,
                "blocos Apple e Docker sempre presentes")
         expect(controller.podmanRowItem.menu == nil && controller.lumeRowItem.menu == nil,
@@ -1014,15 +1057,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // CLI nova com servico antigo de pe: pede restart na linha Apple.
         controller.state = .running
         controller.serviceVersion = "1.5.0"
+        controller.pathDisplay = "/usr/local/bin/container"
         controller.apply()
-        expect(controller.appleRowItem.title == "Apple Container 9.9.9 (running 1.5.0, restart to update)",
-               "servico com versao antiga pede restart")
+        expect(controller.appleInfoItem.title == "Apple Container 9.9.9 (running 1.5.0, restart to update)"
+               && controller.appleRowItem.title == "Apple Container",
+               "servico com versao antiga pede restart no About; cabecalho do bloco sem versao")
         controller.serviceVersion = "9.9.9"
         controller.apply()
-        expect(controller.appleRowItem.title == "Apple Container 9.9.9",
+        expect(controller.appleInfoItem.title == "Apple Container 9.9.9",
                "servico na mesma versao da CLI sem aviso")
         controller.serviceVersion = nil
         controller.cliVersion = nil
+        controller.pathDisplay = nil
+        controller.apply()
+        expect(controller.appleInfoItem.title == "Apple Container: CLI not found" && controller.pathItem.menu == nil,
+               "sem CLI o About diz nao encontrada e some com o caminho")
 
         // Ciclo de vida da linha de erro: entra, atualiza, sai.
         controller.finish(result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Start failed"),

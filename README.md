@@ -10,16 +10,14 @@ controla o servico Apple `container` (github.com/apple/container).
   Durante um toggle o dot fica esmaecido e o poll nao sobrescreve o estado
   (sem piscar no meio da transicao).
 - Clique abre o menu. Abrir o app de novo (Finder, Spotlight, `open`) com
-  ele ja rodando tambem abre o menu. A largura segue o conteudo (~190pt).
+  ele ja rodando tambem abre o menu. Linhas compactas de 19pt (a nativa do macOS 26 tem ~24pt); a largura
+  segue o conteudo.
   O menu, nesta ordem:
 
 ```
 Container Status x.y.z
 -----------------------------
-Apple Container x.y.z            versao da CLI em uso; "(running a.b.c,
-                                 restart to update)" se o servico de pe
-                                 for de versao anterior
-  /usr/local/bin/container       caminho resolvido; "destino via symlink"
+Apple Container
   Status: Running (2 containers)
   web - 2048 MB                  containers de pe (ate 8, id e memoria)
   Enable Daemon / Disable Daemon oculto sem a CLI
@@ -40,8 +38,12 @@ Apple Container x.y.z            versao da CLI em uso; "(running a.b.c,
 Open at Login                    SMAppService, sem permissoes extras
 -----------------------------
 Refresh                          rescan: CLI, sondas e release no GitHub
-About  >                         painel do app + GitHub de Apple Container,
-                                 OrbStack, Lima e Lume
+About  >                         painel do app; versao da CLI ("(running
+                                 a.b.c, restart to update)" se o servico de
+                                 pe for anterior) e caminho resolvido;
+                                 GitHub de Apple Container, Docker, OrbStack,
+                                 Rancher Desktop, Podman, Podman Desktop,
+                                 Lume e Lima
 Quit
 ```
 
