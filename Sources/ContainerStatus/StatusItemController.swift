@@ -637,10 +637,23 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     static let openPollInterval: TimeInterval = 3
     private(set) var pollInterval: TimeInterval = 0
 
-    func menuWillOpen(_ menu: NSMenu) { startPolling(every: Self.openPollInterval) }
+    /// Menu aberto: a renovacao adiada do fechamento anterior nao roda.
+    private(set) var menuOpen = false
+
+    func menuWillOpen(_ menu: NSMenu) {
+        menuOpen = true
+        startPolling(every: Self.openPollInterval)
+    }
     func menuDidClose(_ menu: NSMenu) {
         startPolling(every: Self.idlePollInterval)
-        renewMenus()
+        // NSMenu.h proibe mudar a estrutura dentro de menuWillOpen/DidClose:
+        // renova no proximo giro do main loop, com o fechamento ja concluido,
+        // e so se o menu nao foi reaberto nesse meio tempo.
+        menuOpen = false
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.menuOpen else { return }
+            self.renewMenus()
+        }
     }
 
     /// NSMenu guarda a maior largura de view que ja mediu e nunca encolhe
@@ -1088,7 +1101,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         controller.apply()
         let aboutBefore = controller.aboutItem.submenu
         let aboutCount = aboutBefore?.items.count ?? -1
-        controller.menuDidClose(controller.menu)
+        // Reabrir antes do giro do main loop cancela a renovacao adiada.
+        let menuBefore = controller.menu
+        controller.menuDidClose(menuBefore)
+        controller.menuWillOpen(menuBefore)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        expect(controller.menu === menuBefore, "menu reaberto antes da renovacao adiada nao e trocado")
+        // Fechar: nada muda dentro do callback (NSMenu.h); renova no giro seguinte.
+        controller.menuDidClose(menuBefore)
+        expect(controller.menu === menuBefore && menuBefore.numberOfItems > 0,
+               "estrutura intacta dentro de menuDidClose")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         expect(wideWidth > narrowWidth + 40 && controller.menu.size.width == narrowWidth,
                "menu volta a encolher ao fechar depois que a linha larga some (\(Int(narrowWidth)) -> \(Int(wideWidth)) -> \(Int(controller.menu.size.width))pt)")
         expect(controller.item.menu === controller.menu && controller.menu.delegate === controller
