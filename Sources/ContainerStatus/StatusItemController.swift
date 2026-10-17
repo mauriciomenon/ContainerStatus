@@ -17,7 +17,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Comprimento no estilo Stats: ponto de 7.5 pt quase colado na borda
     /// do canvas 9 - sem margem morta, o glass do sistema da o resto.
     private let item = NSStatusBar.system.statusItem(withLength: 10)
-    private let menu = NSMenu()
+    private var menu = NSMenu()
     private let pollQueue = DispatchQueue(label: "local.containerstatus.poll", qos: .utility)
 
     private var state: ServiceState = .stopped
@@ -638,7 +638,33 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private(set) var pollInterval: TimeInterval = 0
 
     func menuWillOpen(_ menu: NSMenu) { startPolling(every: Self.openPollInterval) }
-    func menuDidClose(_ menu: NSMenu) { startPolling(every: Self.idlePollInterval) }
+    func menuDidClose(_ menu: NSMenu) {
+        startPolling(every: Self.idlePollInterval)
+        renewMenus()
+    }
+
+    /// NSMenu guarda a maior largura de view que ja mediu e nunca encolhe
+    /// (medido: item com view sai ou diminui e a largura fica). Ao fechar,
+    /// os itens migram para menus novos e a proxima abertura mede do zero;
+    /// com o menu aberto a largura so cresce.
+    func renewMenus() {
+        menu = Self.renewed(menu)
+        item.menu = menu
+    }
+
+    static func renewed(_ old: NSMenu) -> NSMenu {
+        let fresh = NSMenu(title: old.title)
+        fresh.autoenablesItems = old.autoenablesItems
+        fresh.font = old.font
+        fresh.delegate = old.delegate
+        let entries = old.items
+        old.removeAllItems()
+        for entry in entries {
+            if let submenu = entry.submenu { entry.submenu = renewed(submenu) }
+            fresh.addItem(entry)
+        }
+        return fresh
+    }
 
     /// Reagenda o timer unico (cancela o anterior: nunca dois timers vivos).
     private func startPolling(every interval: TimeInterval = StatusItemController.idlePollInterval) {
@@ -851,7 +877,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         Task.detached(priority: .userInitiated) { [weak self] in
             let result = turningOff ? probe.stop() : probe.start()
             // Controle pode retornar antes do runtime terminar de subir
-            // (ex.: open -a do OrbStack e imediato, o app ainda nao responde);
+            // (ex.: open -a do Docker Desktop e imediato, o app ainda nao responde);
             // sondar com retry curto antes de decidir o estado final.
             var state = probe.currentStatus().state
             if result.exitedCleanly {
@@ -1053,6 +1079,25 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         expect(controller.menu.size.width < 230,
                "menu estreito: largura segue o conteudo (\(Int(controller.menu.size.width))pt)")
+        // Linha larga (erro) aparece e some: o menu volta a largura anterior.
+        let narrowWidth = controller.menu.size.width
+        controller.detail = String(repeating: "erro muito longo ", count: 6)
+        controller.apply()
+        let wideWidth = controller.menu.size.width
+        controller.detail = nil
+        controller.apply()
+        let aboutBefore = controller.aboutItem.submenu
+        let aboutCount = aboutBefore?.items.count ?? -1
+        controller.menuDidClose(controller.menu)
+        expect(wideWidth > narrowWidth + 40 && controller.menu.size.width == narrowWidth,
+               "menu volta a encolher ao fechar depois que a linha larga some (\(Int(narrowWidth)) -> \(Int(wideWidth)) -> \(Int(controller.menu.size.width))pt)")
+        expect(controller.item.menu === controller.menu && controller.menu.delegate === controller
+               && controller.aboutItem.submenu !== aboutBefore
+               && controller.aboutItem.submenu?.items.count == aboutCount && aboutCount > 5
+               && aboutBefore?.items.isEmpty == true && controller.menu.autoenablesItems == false,
+               "menu renovado: mesmo delegate, status item aponta para ele, submenus migrados")
+        controller.pollTimer?.cancel()
+        controller.pollTimer = nil
 
         // Bloco Apple: estado, linhas de container com memoria, acao.
         let listTwo = [ContainerCLI.ContainerSummary(id: "web", memoryBytes: 2_147_483_648),

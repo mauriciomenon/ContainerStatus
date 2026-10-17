@@ -15,11 +15,6 @@ final class CompactMenuRow: NSView {
     /// borda da tela; o excedente quebra em linhas (altura cresce).
     static let maxTextWidth: CGFloat = 380
 
-    /// Natural size da ultima medicao: so reajusta o frame quando o conteudo
-    /// muda (o autoresize estica a linha ate a largura do menu, e encolher a
-    /// cada poll brigaria com ele).
-    private var naturalSize = NSSize.zero
-
     static func isInert(_ item: NSMenuItem) -> Bool {
         !item.isSeparatorItem && item.action == nil && item.submenu == nil
     }
@@ -30,8 +25,9 @@ final class CompactMenuRow: NSView {
         for item in menu.items where !item.isSeparatorItem {
             if isInert(item) {
                 let row = item.view as? CompactMenuRow ?? {
+                    // Sem autoresize: linha inerte nao desenha realce nem fundo,
+                    // entao nao precisa esticar; esticada, prendia o menu largo.
                     let created = CompactMenuRow(frame: NSRect(x: 0, y: 0, width: 100, height: rowHeight))
-                    created.autoresizingMask = [.width]
                     item.view = created
                     return created
                 }()
@@ -78,10 +74,7 @@ final class CompactMenuRow: NSView {
         let size = measure(text)
         let natural = NSSize(width: textOrigin + size.width + Self.trailing,
                              height: max(Self.rowHeight, size.height + 4))
-        if natural != naturalSize {
-            naturalSize = natural
-            setFrameSize(natural)
-        }
+        if frame.size != natural { setFrameSize(natural) }
         // Com view, o tooltip do item nao aparece sozinho.
         toolTip = enclosingMenuItem?.toolTip
         setAccessibilityElement(true)
