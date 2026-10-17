@@ -21,8 +21,8 @@ struct RuntimeProbeConfig: Sendable {
     /// informativa e conservadora, o poll seguinte corrige.
     let interpret: @Sendable (CLIRunResult) -> ExternalRuntimeState
     /// Comandos de controle (passo 2). nil = linha read-only permanente:
-    /// docker tem o daemon dono do socket (o provider e quem manda) e lume
-    /// liga/desliga VM por nome, nao servico.
+    /// docker tem o daemon dono do socket (o provider e quem manda) e Lima
+    /// so lista instancias.
     let control: RuntimeControl?
     /// Sonda informativa read-only (passo 3 parcial): identifica o dono
     /// efetivo do runtime, ex. o contexto do docker. Vai para o tooltip.
@@ -46,9 +46,9 @@ struct RuntimeProbeConfig: Sendable {
     let detectAppPath: String?
     /// Natureza do servico, para o tooltip ("launchd service", "app + VM").
     let nature: String
-    /// Provider baseado em app: a acao real e Start/Stop do app, nao
-    /// Enable/Disable Daemon (que enganaria quando o daemon nao existe
-    /// separadamente).
+    /// Provider baseado em app (Docker Desktop, Rancher Desktop): o controle
+    /// abre e fecha o aplicativo, rotulos Open/Quit. Os demais sao motor ou
+    /// servico, rotulos Start/Stop.
     let appBased: Bool
 
     init(label: String, binaryName: String, statusArguments: [String],
@@ -124,8 +124,9 @@ extension RuntimeProbeConfig {
         nature: "VMs Lima (limactl)"
     )
 
-    /// Providers do mesmo backbone docker: so entram no menu quando
-    /// detectados. Cada um com toggle proprio quando e o dono do daemon.
+    /// Providers do mesmo backbone docker: entram no submenu Docker quando
+    /// detectados (Docker Desktop sempre, como "Not Installed" se ausente).
+    /// Cada um com toggle proprio quando e o dono do daemon.
     static let dockerFamily: [RuntimeProbeConfig] =
         [.orbstack, .colima, .dockerDesktop, .rancherDesktop, .finch]
 
@@ -254,17 +255,18 @@ extension RuntimeProbeConfig {
         nature: "VM (base Lima)"
     )
 
-    /// `orbctl status` responde "Running" exit 0 quando o OrbStack esta de pe.
-    /// Start via LaunchServices (open -a); stop derruba o servico inteiro.
+    /// `orbctl status` responde "Running" exit 0 quando o motor do OrbStack
+    /// esta de pe. O estado e o do MOTOR (o app pode estar aberto com ele
+    /// parado), entao o controle e de servico: `orbctl start/stop`, rotulos
+    /// Start/Stop. Antes era "Open/Quit" com `open -a` + `orbctl stop`: Quit
+    /// parava o motor e deixava o app, e Open num app ja aberto nao religava.
     static let orbstack = RuntimeProbeConfig(
         label: "OrbStack", binaryName: "orbctl", statusArguments: ["status"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
-        control: RuntimeControl(
-            startBinary: "/usr/bin/open", startArguments: ["-a", "OrbStack"],
-            startTimeout: 30,
-            stopBinary: "orbctl", stopArguments: ["stop"], stopTimeout: 120),
-        nature: "app OrbStack + VM (backbone docker)",
-        appBased: true
+        control: .selfBinary(binaryName: "orbctl",
+                             startArguments: ["start"], startTimeout: 120,
+                             stopArguments: ["stop"], stopTimeout: 120),
+        nature: "motor OrbStack (VM, backbone docker)"
     )
 }
 
@@ -501,8 +503,12 @@ final class RuntimeProbe: Sendable {
         let result = (reusable ? statusResult : nil)
             ?? ContainerCLI.runBinary(path, arguments: info.arguments, timeout: config.statusTimeout)
         // Ate 6 linhas (uma por instancia no Lima; o docker context e uma so).
+        // "," e ";" sao os separadores do tooltip, que o submenu desfaz em
+        // linhas: na saida da CLI viram espaco, senao um nome de contexto
+        // forjado ("x; Actions; Quit OrbStack") viraria linhas falsas no menu.
         let lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: true)
             .map { ContainerCLI.menuSafe(String($0).trimmingCharacters(in: .whitespaces)) }
+            .map { $0.replacingOccurrences(of: ",", with: " ").replacingOccurrences(of: ";", with: " ") }
         guard result.succeeded, !lines.isEmpty else { return nil }
         let shown = lines.prefix(6).joined(separator: ", ")
         return "\(info.label): \(shown)\(lines.count > 6 ? ", ..." : "")"

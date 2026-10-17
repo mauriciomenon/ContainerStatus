@@ -4,10 +4,19 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Unreleased]
 
+### Corrigido
+- OrbStack: "Quit" parava o motor e deixava o app aberto, e "Open" num app
+  ja aberto nao religava; agora e Start/Stop via `orbctl`.
+- Submenu do Lima que esvaziava e voltava podia derrubar o app.
+- Saida de CLI com "," ou ";" (ex.: nome de contexto Docker) nao vira mais
+  linhas falsas no submenu; versao da CLI sem quebra de linha no About.
+- Linhas de status dos providers na cor normal (estavam cinza).
+
 ### Alterado
 - Submenus com secoes Status (dados) e Actions (cliques). Na familia
-  Docker, provider que e aplicativo oferece Open/Quit e provider que e
-  servico oferece Start/Stop; a descricao tecnica do runtime ficou so no
+  Docker, provider que e aplicativo (Docker Desktop, Rancher Desktop)
+  oferece Open/Quit e motor ou servico (OrbStack, Colima, Finch) oferece
+  Start/Stop; a descricao tecnica do runtime ficou so no
   tooltip. Rotulos em ingles: Context, Instances, Containers, Auto-start.
 - Docker Desktop sempre listado no submenu Docker ("Not Installed" quando
   ausente). Lume passa a Start/Stop Lume, como os demais servicos.
@@ -21,8 +30,9 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 - Versao da CLI, aviso de restart e caminho resolvido foram para o About;
   o bloco Apple comeca em "Apple Container" e linhas informativas usam a
   cor normal (cinza so em acao desabilitada).
-- Menu mais compacto: linhas de 19pt e so tres separadores (399pt -> 271pt
-  de altura no mesmo estado).
+- Menu mais compacto: linhas informativas de 19pt e so tres separadores
+  (399pt -> 311pt de altura no mesmo estado). Linhas clicaveis seguem
+  nativas: teclado, VoiceOver e cancelar arrastando funcionam como antes.
 
 ## [1.1.1] - 2026-10-16
 

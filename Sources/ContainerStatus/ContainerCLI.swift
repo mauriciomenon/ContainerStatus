@@ -545,10 +545,10 @@ final class ContainerCLI: Sendable {
     }
 
     static func parseVersion(_ text: String) -> String? {
-        guard let range = text.range(of: #"version\s+(\d+(?:\.\d+)+)"#, options: .regularExpression) else {
-            return nil
-        }
-        return String(text[range]).split(separator: " ").last.map(String.init)
+        // So o numero (grupo 1): separar por espaco deixava passar "version\n1.5.0"
+        // inteiro, com quebra de linha, ate o menu.
+        guard let match = text.firstMatch(of: /version\s+(\d+(?:\.\d+)+)/) else { return nil }
+        return String(match.1)
     }
 
     static func firstLine(_ text: String) -> String {

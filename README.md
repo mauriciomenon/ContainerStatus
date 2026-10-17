@@ -10,8 +10,9 @@ controla o servico Apple `container` (github.com/apple/container).
   Durante um toggle o dot fica esmaecido e o poll nao sobrescreve o estado
   (sem piscar no meio da transicao).
 - Clique abre o menu. Abrir o app de novo (Finder, Spotlight, `open`) com
-  ele ja rodando tambem abre o menu. Linhas compactas de 19pt (a nativa do macOS 26 tem ~24pt); a largura
-  segue o conteudo.
+  ele ja rodando tambem abre o menu. Linhas informativas compactas de 19pt (a nativa do macOS 26 tem ~24pt);
+  linhas clicaveis ficam nativas (teclado, VoiceOver, cancelar arrastando).
+  A largura segue o conteudo.
   O menu, nesta ordem:
 
 ```
@@ -23,15 +24,16 @@ Apple Container
   Enable Daemon / Disable Daemon oculto sem a CLI
   Update available: x.y.z        so quando a release supera a instalada
 -----------------------------
-  Docker: Running / Not Running >  submenu em duas secoes. Status:
-                                 contexto, containers e o estado de cada
-                                 provider detectado (OrbStack, Colima,
-                                 Rancher, Finch); Docker Desktop sempre
-                                 listado ("Not Installed" se ausente). Actions:
-                                 app abre/fecha (Open/Quit OrbStack),
-                                 servico liga/desliga (Start/Stop Colima)
------------------------------    blocos abaixo so quando detectados
-  Podman: ...  + Enable/Disable Daemon
+  Docker: Running / Not Running / Not Installed  >
+                                 submenu em duas secoes. Status: contexto,
+                                 containers e o estado de cada provider
+                                 detectado (OrbStack, Colima, Rancher,
+                                 Finch); Docker Desktop sempre listado
+                                 ("Not Installed" se ausente). Actions:
+                                 app abre/fecha (Open/Quit Docker Desktop,
+                                 Rancher Desktop); motor/servico liga e
+                                 desliga (Start/Stop OrbStack, Colima, Finch)
+  Podman: ...  + Enable/Disable Daemon     (blocos so quando detectados)
   Lume: ...  >   Status (auto-start) + Actions: Start/Stop Lume
                  (servico brew lume serve)
   Lima: ...  >   Status somente leitura: uma instancia por linha
@@ -39,7 +41,6 @@ Apple Container
 -----------------------------
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Open at Login                    SMAppService, sem permissoes extras
------------------------------
 Refresh                          rescan: CLI, sondas e release no GitHub
 About  >                         painel do app; versao da CLI ("(running
                                  a.b.c, restart to update)" se o servico de
@@ -101,7 +102,7 @@ cada checagem enquanto nao for encontrado, sem restart):
 | `container system version` | servico de pe apos troca da CLI ou start/stop; repetido enquanto a versao do servico divergir da CLI | 2s |
 
 **Unica conexao de rede:** `GET https://api.github.com/repos/apple/container/releases/latest`
-no arranque, a cada 6h e no rescan do cabecalho, sem token e sem enviar
+no arranque, a cada 6h e no Refresh, sem token e sem enviar
 dados da maquina. Quando a release publicada supera a CLI instalada, o
 bloco Apple ganha "Update available: x.y.z", que abre a pagina da release.
 
@@ -302,6 +303,7 @@ Sources/ContainerStatus/
   UpstreamRelease.swift      ultima release do apple/container no GitHub
   SelfTest.swift             checagens do nucleo e entrada dos testes de menu
   StatusItemController.swift NSStatusItem, menu, maquina de estados, polling
+  CompactMenuRow.swift       linha informativa compacta (19pt) do menu
 Scripts/                     icone, validacao e empacotamento .app sem Xcode
 .github/workflows/ci.yml     validacao ARM64/Intel e artefatos de master
 ```

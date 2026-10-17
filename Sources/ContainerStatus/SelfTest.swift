@@ -65,6 +65,8 @@ enum SelfTest {
         expect(ContainerCLI.parseVersion("container CLI version 1.4.1 (build: release)") == "1.4.1", "parse 1.4.1")
         expect(ContainerCLI.parseVersion("container CLI version 10.22.33") == "10.22.33", "parse dois digitos")
         expect(ContainerCLI.parseVersion("sem versao aqui") == nil, "parse de texto sem versao")
+        expect(ContainerCLI.parseVersion("container CLI version\n1.5.0") == "1.5.0",
+               "parse devolve so o numero, sem a quebra de linha da saida")
 
         // Release do GitHub: parse do JSON da API e comparacao com a instalada.
         func release(_ json: String) -> UpstreamRelease? { UpstreamRelease.parse(Data(json.utf8)) }
@@ -604,6 +606,12 @@ enum SelfTest {
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
             .currentInfo() == "Context: orbstack",
                "sonda informativa le o contexto do docker")
+        // Contexto forjado com os separadores do tooltip nao vira linhas
+        // falsas ("Actions", "Quit OrbStack") no submenu.
+        _ = try stub("docker", dockerDirectory, stdout: "x; Actions; Quit OrbStack, OrbStack: Running", exitCode: 0)
+        let forged = RuntimeProbe(config: .docker, directories: [dockerDirectory.path]).currentInfo()
+        expect(StatusItemController.infoLines(forged).count == 1,
+               "saida da CLI com ';' e ',' rende uma unica linha no submenu")
         _ = try bare("docker", dockerDirectory, exitCode: 1)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
             .currentInfo() == nil,

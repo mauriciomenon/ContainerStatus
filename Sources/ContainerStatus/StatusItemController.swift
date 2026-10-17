@@ -111,7 +111,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var infoItemPools: [String: [NSMenuItem]] = [:]
     private var sectionHeaders: [String: NSMenuItem] = [:]
     static let compactFont = NSFont.menuFont(ofSize: 12)
-    /// Cabecalho: titulo em negrito, linha de texto comum (sem view).
+    /// Cabecalho: titulo em negrito (linha inerte, desenhada compacta).
     private let headerItem = NSMenuItem()
     /// Varedura ativa (rescan da CLI + poll + release), linha do rodape.
     private let refreshItem = NSMenuItem()
@@ -234,10 +234,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         dockerDetectItem.isEnabled = false
         for probe in runtimes {
             guard let row = subStatusItems[probe.label] else { continue }
+            // Linha de status e so informacao: sem acao ligada (uma linha de
+            // status habilitada por engano viraria um Stop escondido).
             row.isEnabled = false
-            row.action = #selector(runtimeToggled(_:))
-            row.target = self
-            row.representedObject = probe.label
             if let action = subActionItems[probe.label] {
                 action.target = self
                 action.action = #selector(runtimeToggled(_:))
@@ -307,7 +306,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// uma por parte, e listas abertas um elemento por linha, indentado.
     /// A natureza (descricao tecnica do runtime) fica so no tooltip: no
     /// submenu entram apenas dados ("Context: x", "Containers: 2").
-    static func infoLines(_ info: String?, nature: String = "") -> [(text: String, indent: Int)] {
+    nonisolated static func infoLines(_ info: String?, nature: String = "") -> [(text: String, indent: Int)] {
         guard let info else { return [] }
         var lines: [(text: String, indent: Int)] = []
         for part in info.components(separatedBy: "; ") where !part.isEmpty && part != nature {
@@ -358,6 +357,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if !actions.isEmpty { items += [sectionHeader("Actions", label: label)] + actions }
         row.isEnabled = !items.isEmpty
         guard !items.isEmpty else {
+            // Esvaziar antes de soltar: os itens ficam no pool e seriam
+            // reinseridos num submenu novo; se o antigo ainda estiver vivo
+            // (tracking do AppKit), o NSMenu aborta com "already in another menu".
+            row.submenu?.removeAllItems()
             row.submenu = nil
             return
         }
@@ -457,7 +460,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // Tooltips vem do cache montado fora da main (spawnPoll/finishRuntime):
         // tooltipInfo dispara processos e travaria o menu aqui.
         let dockerState = runtimeStates["Docker"] ?? .notInstalled
-        dockerRowItem.title = "Docker: \(dockerState == .running ? "Running" : "Not Running")"
+        dockerRowItem.title = "Docker: " + (dockerState == .notInstalled ? "Not Installed"
+            : (dockerState == .running ? "Running" : "Not Running"))
         dockerRowItem.toolTip = runtimeInfo["Docker"]
         dockerDetectItem.title = "Docker CLI not found"
         // Status: CLI ausente (se for o caso) e o estado de cada provider
@@ -994,10 +998,18 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "rodape: sep | login | Refresh | About | Quit na ultima linha")
         expect(menu.items.filter(\.isSeparatorItem).count == 3,
                "so tres separadores: titulo, bloco Apple e rodape")
-        let compactRows = menu.items.filter { !$0.isSeparatorItem }
+        // Inerte (sem acao, sem submenu) = linha compacta; clicavel = nativa
+        // (teclado, VoiceOver, cancelar arrastando e realce ficam com o AppKit).
+        let allRows = menu.items.filter { !$0.isSeparatorItem }
             + (controller.aboutItem.submenu?.items.filter { !$0.isSeparatorItem } ?? [])
-        expect(compactRows.allSatisfy { ($0.view as? CompactMenuRow)?.frame.height == CompactMenuRow.rowHeight },
-               "todas as linhas compactas (\(CompactMenuRow.rowHeight)pt), submenu About incluso")
+        let inertRows = allRows.filter(CompactMenuRow.isInert)
+        expect(!inertRows.isEmpty
+               && inertRows.allSatisfy { ($0.view as? CompactMenuRow)?.frame.height == CompactMenuRow.rowHeight },
+               "linhas informativas compactas (\(CompactMenuRow.rowHeight)pt), submenu About incluso")
+        expect(allRows.filter { !CompactMenuRow.isInert($0) }.allSatisfy { $0.view == nil }
+               && controller.quitItem.view == nil && controller.aboutItem.view == nil
+               && controller.loginItem.view == nil && controller.dockerRowItem.view == nil,
+               "linhas clicaveis e com submenu continuam nativas")
         controller.pathDisplay = "/opt/homebrew/Cellar/container/1.5.0/bin/container via /usr/local/bin/container"
         controller.apply()
         let aboutMenu = controller.aboutItem.submenu
@@ -1008,7 +1020,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "caminho da CLI no About, logo abaixo da versao")
         controller.pathDisplay = nil
         controller.apply()
-        CompactMenuRow.checkClick(expect: expect)
         expect(controller.quitItem.action == #selector(quitClicked(_:))
                && controller.refreshItem.action == #selector(refreshClicked(_:)),
                "Quit e Refresh ligados as acoes")
@@ -1019,7 +1030,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                && linkEntries.map { $0.representedObject as? URL } == StatusItemController.projectLinks.map { $0.url }
                && linkEntries.count == 8,
                "submenu About: painel, versao da CLI e links de Apple Container e dos runtimes")
-        // Cor: informativa (sem acao) normal; acao desabilitada cinza.
+        // Cor: informativa na cor normal; acao em voo segue nativa (cinza do AppKit).
         func color(_ item: NSMenuItem) -> NSColor? {
             (item.view as? CompactMenuRow)?.title.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
         }
@@ -1027,7 +1038,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "Apple Container e Status em cor normal")
         controller.activity = .starting
         controller.apply()
-        expect(color(controller.actionItem) == .disabledControlTextColor, "acao desabilitada (Working...) em cinza")
+        expect(controller.actionItem.view == nil && !controller.actionItem.isEnabled,
+               "acao em voo continua nativa e desabilitada")
         controller.activity = .none
         controller.apply()
         expect(controller.appleRowItem.menu != nil && controller.dockerRowItem.menu != nil,
@@ -1124,15 +1136,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "docker detectado: estado na linha, sem aviso de CLI ausente")
         // Secoes claras: o que e informacao (Status) e o que e clique (Actions).
         expect(controller.dockerRowItem.submenu?.items.map(\.title)
-               == ["Status", "Context: orbstack", "Containers: 2", "OrbStack: Running", "Docker Desktop: Not Installed", "Actions", "Quit OrbStack"],
+               == ["Status", "Context: orbstack", "Containers: 2", "OrbStack: Running", "Docker Desktop: Not Installed", "Actions", "Stop OrbStack"],
                "submenu Docker: Status (dados, sem a descricao tecnica) e Actions")
         expect(controller.dockerRowItem.submenu?.items.filter { $0.isEnabled }
                == [controller.subActionItems["OrbStack"]].compactMap { $0 },
                "so as acoes sao clicaveis no submenu Docker")
         controller.absorb(poll: (.running, nil),
                           runtimes: ["Docker": .running, "OrbStack": .stopped], sequence: 3)
-        expect(controller.subActionItems["OrbStack"]?.title == "Open OrbStack",
-               "app parado oferece abrir o aplicativo")
+        expect(controller.subActionItems["OrbStack"]?.title == "Start OrbStack",
+               "OrbStack (motor) parado oferece Start, nao Open")
         expect(controller.subStatusItems["Colima"]?.menu == nil
                && controller.subActionItems["Docker Desktop"]?.menu == nil,
                "providers nao detectados ficam fora; Docker Desktop ausente sem acao")
@@ -1178,6 +1190,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                                 runtimes: ["Colima": .stopped], sequence: 1)
         expect(colimaRow().menu != nil && colimaRow().isEnabled == false,
                "colima detectado entra como sub-item do bloco Docker")
+        // Com runtime real: status sem acao (inerte, cor normal), acao ligada.
+        let colimaAction = toggleController.subActionItems["Colima"]
+        expect(colimaRow().action == nil && colimaRow().target == nil
+               && (colimaRow().view as? CompactMenuRow)?.title
+                   .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .labelColor,
+               "linha de status sem acao ligada e na cor normal")
+        expect(colimaAction?.action == #selector(runtimeToggled(_:)) && colimaAction?.target === toggleController
+               && colimaAction?.view == nil,
+               "acao do provider ligada ao toggle e nativa")
         expect(toggleController.subActionItems["Colima"]?.title == "Start Colima",
                "colima (servico) parado oferece Start, nao Open")
         toggleController.subActionItems["Colima"]?.representedObject = "Colima"
@@ -1299,10 +1320,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(lumeController.limaRowItem.submenu?.items[1] === firstLine
                && lumeController.limaRowItem.submenu?.items[1].title == "Instances: default Running",
                "poll novo atualiza as linhas no lugar, sem recriar itens")
+        // Submenu antigo ainda vivo (como no tracking do AppKit) enquanto o
+        // Lima esvazia e volta: sem esvaziar antes de soltar, reinserir os
+        // itens do pool aborta o app ("already in another menu").
+        let oldLimaMenu = lumeController.limaRowItem.submenu
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped], sequence: 4)
-        expect(lumeController.limaRowItem.submenu == nil && !lumeController.limaRowItem.isEnabled,
-               "lima sem informacao fica sem submenu vazio")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .running], sequence: 5)
+        expect(lumeController.limaRowItem.submenu == nil && !lumeController.limaRowItem.isEnabled
+               && oldLimaMenu?.items.isEmpty == true,
+               "lima sem informacao fica sem submenu e solta os itens do antigo")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped],
+                              info: ["Lima": "Instances: default Running"], sequence: 5)
+        expect(lumeController.limaRowItem.submenu !== oldLimaMenu
+               && lumeController.limaRowItem.submenu?.items.map(\.title) == ["Status", "Instances: default Running"],
+               "lima volta a ter info com o submenu antigo vivo, sem abortar")
+        withExtendedLifetime(oldLimaMenu) {}
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .running], sequence: 15)
         expect(lumeController.podmanActionItem.menu != nil
                && lumeController.podmanActionItem.title == "Disable Daemon"
                && lumeController.podmanActionItem.action == #selector(runtimeToggled(_:))
@@ -1310,9 +1342,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                && lumeController.menu.index(of: lumeController.podmanActionItem)
                   == lumeController.menu.index(of: lumeController.podmanRowItem) + 1,
                "podman detectado mostra a acao logo abaixo da linha")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .notInstalled], sequence: 6)
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .notInstalled], sequence: 16)
         expect(lumeController.podmanActionItem.menu == nil, "podman sumido leva a acao junto")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 7)
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 17)
         expect(lumeController.lumeRowItem.menu != nil
                && lumeController.lumeDetectItem.title == "Start Lume"
                && lumeController.lumeDetectItem.menu === lumeController.lumeRowItem.submenu
