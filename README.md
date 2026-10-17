@@ -23,15 +23,18 @@ Apple Container
   Enable Daemon / Disable Daemon oculto sem a CLI
   Update available: x.y.z        so quando a release supera a instalada
 -----------------------------
-  Docker: Running / Not Running >  submenu: Detected / Not Detected, os
-                                 detectados da familia (OrbStack, Colima,
-                                 Docker Desktop, Rancher, Finch) com
-                                 Start/Stop ou Enable/Disable proprio, e
-                                 o contexto do docker
+  Docker: Running / Not Running >  submenu em duas secoes. Status:
+                                 contexto, containers e o estado de cada
+                                 provider detectado (OrbStack, Colima,
+                                 Rancher, Finch); Docker Desktop sempre
+                                 listado ("Not Installed" se ausente). Actions:
+                                 app abre/fecha (Open/Quit OrbStack),
+                                 servico liga/desliga (Start/Stop Colima)
 -----------------------------    blocos abaixo so quando detectados
   Podman: ...  + Enable/Disable Daemon
-  Lume: ...  >   submenu: Enable/Disable Daemon (brew lume serve) + info
-  Lima: ...  >   submenu somente leitura: uma instancia por linha
+  Lume: ...  >   Status (auto-start) + Actions: Start/Stop Lume
+                 (servico brew lume serve)
+  Lima: ...  >   Status somente leitura: uma instancia por linha
   VMware vmnet: Running - 1 VM + Enable Daemon (senha de admin; sem desligar)
 -----------------------------
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll

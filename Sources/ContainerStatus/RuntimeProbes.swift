@@ -119,7 +119,7 @@ extension RuntimeProbeConfig {
             result.succeeded && result.stdout.split(separator: "\n").contains { $0.hasSuffix(" Running") }
                 ? .running : .stopped
         },
-        info: RuntimeInfo(label: "instancias", arguments: ["list", "--format", "{{.Name}} {{.Status}}"]),
+        info: RuntimeInfo(label: "Instances", arguments: ["list", "--format", "{{.Name}} {{.Status}}"]),
         statusTimeout: 10,  // ate 3s por instancia com hostagent lento
         nature: "VMs Lima (limactl)"
     )
@@ -148,7 +148,7 @@ extension RuntimeProbeConfig {
     static let docker = RuntimeProbeConfig(
         label: "Docker", binaryName: "docker", statusArguments: ["info"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
-        info: RuntimeInfo(label: "contexto", arguments: ["context", "show"]),
+        info: RuntimeInfo(label: "Context", arguments: ["context", "show"]),
         countArguments: ["ps", "-q"],
         nature: "daemon docker (dono no contexto)"
     )
@@ -549,10 +549,10 @@ final class RuntimeProbe: Sendable {
             parts.append(runtimeInfo)
         }
         if let autoStart = autoStartLabel() {
-            parts.append("auto-start: \(autoStart)")
+            parts.append("Auto-start: On (\(autoStart))")
         }
         if state == .running, let runningCount = runningCount() {
-            parts.append(runningCount == 1 ? "1 container" : "\(runningCount) containers")
+            parts.append("Containers: \(runningCount)")
         }
         return parts.isEmpty ? nil : parts.joined(separator: "; ")
     }

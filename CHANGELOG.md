@@ -5,6 +5,12 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 ## [Unreleased]
 
 ### Alterado
+- Submenus com secoes Status (dados) e Actions (cliques). Na familia
+  Docker, provider que e aplicativo oferece Open/Quit e provider que e
+  servico oferece Start/Stop; a descricao tecnica do runtime ficou so no
+  tooltip. Rotulos em ingles: Context, Instances, Containers, Auto-start.
+- Docker Desktop sempre listado no submenu Docker ("Not Installed" quando
+  ausente). Lume passa a Start/Stop Lume, como os demais servicos.
 - Docker, Lume e Lima viram linhas com submenu: deteccao, acoes e
   informacao (contexto, instancias do Lima) ficam dentro do submenu, nao
   mais espalhadas no menu principal.

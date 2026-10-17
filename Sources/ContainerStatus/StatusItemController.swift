@@ -101,7 +101,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         ("Docker on GitHub", URL(string: "https://github.com/docker")!),
         ("OrbStack on GitHub", URL(string: "https://github.com/orbstack/orbstack")!),
         ("Rancher Desktop on GitHub", URL(string: "https://github.com/rancher-sandbox/rancher-desktop")!),
-        ("Podman on GitHub", URL(string: "https://github.com/podman-container-tools/podman")!),
+        ("Podman on GitHub", URL(string: "https://github.com/containers/podman")!),
         ("Podman Desktop on GitHub", URL(string: "https://github.com/podman-desktop/podman-desktop")!),
         ("Lume on GitHub", URL(string: "https://github.com/trycua/cua/tree/main/libs/lume")!),
         ("Lima on GitHub", URL(string: "https://github.com/lima-vm/lima")!),
@@ -109,7 +109,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Linhas de informacao (cache do poll) de cada submenu de runtime,
     /// reaproveitadas para o submenu aberto nao piscar a cada poll.
     private var infoItemPools: [String: [NSMenuItem]] = [:]
-    private var infoSeparators: [String: NSMenuItem] = [:]
+    private var sectionHeaders: [String: NSMenuItem] = [:]
     static let compactFont = NSFont.menuFont(ofSize: 12)
     /// Cabecalho: titulo em negrito, linha de texto comum (sem view).
     private let headerItem = NSMenuItem()
@@ -305,10 +305,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     /// Linhas do submenu a partir do tooltip ("natureza; rotulo: a, b; ..."):
     /// uma por parte, e listas abertas um elemento por linha, indentado.
-    static func infoLines(_ info: String?) -> [(text: String, indent: Int)] {
+    /// A natureza (descricao tecnica do runtime) fica so no tooltip: no
+    /// submenu entram apenas dados ("Context: x", "Containers: 2").
+    static func infoLines(_ info: String?, nature: String = "") -> [(text: String, indent: Int)] {
         guard let info else { return [] }
         var lines: [(text: String, indent: Int)] = []
-        for part in info.components(separatedBy: "; ") where !part.isEmpty {
+        for part in info.components(separatedBy: "; ") where !part.isEmpty && part != nature {
             let elements = part.components(separatedBy: ", ")
             lines.append((elements[0], 0))
             lines += elements.dropFirst().map { ($0, 1) }
@@ -316,12 +318,29 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         return lines
     }
 
-    /// Submenu de um runtime: acoes primeiro, depois as linhas de informacao
-    /// do cache do poll (as mesmas do tooltip). So reatribui os itens quando
-    /// a lista muda: trocar com o submenu aberto o faria piscar a cada poll.
-    /// Sem conteudo, a linha fica sem submenu.
-    private func fillSubmenu(_ row: NSMenuItem, label: String, actions: [NSMenuItem]) {
-        let lines = Self.infoLines(runtimeInfo[label])
+    /// Titulo de secao do submenu ("Status", "Actions"): pequeno e
+    /// secundario, sem acao, para separar o que e informacao do que e clique.
+    private func sectionHeader(_ title: String, label: String) -> NSMenuItem {
+        let key = "\(label)/\(title)"
+        if let header = sectionHeaders[key] { return header }
+        let header = NSMenuItem()
+        header.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        header.isEnabled = false
+        sectionHeaders[key] = header
+        return header
+    }
+
+    /// Submenu de um runtime em duas secoes: Status (linhas do cache do poll
+    /// mais `status` extra, ex.: estado dos providers) e Actions. So
+    /// reatribui os itens quando a lista muda: trocar com o submenu aberto o
+    /// faria piscar a cada poll. Sem conteudo, a linha fica sem submenu.
+    private func fillSubmenu(_ row: NSMenuItem, label: String,
+                             status: [NSMenuItem] = [], actions: [NSMenuItem]) {
+        let nature = RuntimeProbeConfig.standard.first { $0.label == label }?.nature ?? ""
+        let lines = Self.infoLines(runtimeInfo[label], nature: nature)
         var pool = infoItemPools[label, default: []]
         while pool.count < lines.count {
             let line = NSMenuItem()
@@ -333,13 +352,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             if pool[index].title != line.text { pool[index].title = line.text }
             pool[index].indentationLevel = line.indent
         }
-        var items = actions
-        if !actions.isEmpty && !lines.isEmpty {
-            let separator = infoSeparators[label] ?? NSMenuItem.separator()
-            infoSeparators[label] = separator
-            items.append(separator)
-        }
-        items += pool.prefix(lines.count)
+        let statusItems = Array(pool.prefix(lines.count)) + status
+        var items: [NSMenuItem] = []
+        if !statusItems.isEmpty { items += [sectionHeader("Status", label: label)] + statusItems }
+        if !actions.isEmpty { items += [sectionHeader("Actions", label: label)] + actions }
         row.isEnabled = !items.isEmpty
         guard !items.isEmpty else {
             row.submenu = nil
@@ -443,42 +459,43 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let dockerState = runtimeStates["Docker"] ?? .notInstalled
         dockerRowItem.title = "Docker: \(dockerState == .running ? "Running" : "Not Running")"
         dockerRowItem.toolTip = runtimeInfo["Docker"]
-        dockerDetectItem.title = dockerState == .notInstalled ? "Not Detected" : "Detected"
-        var dockerSubmenu = [dockerDetectItem]
+        dockerDetectItem.title = "Docker CLI not found"
+        // Status: CLI ausente (se for o caso) e o estado de cada provider
+        // detectado. Actions: um item por provider controlavel - app abre e
+        // fecha o aplicativo (Open/Quit), servico liga e desliga (Start/Stop).
+        var dockerStatus = dockerState == .notInstalled ? [dockerDetectItem] : []
+        var dockerActions: [NSMenuItem] = []
 
         for config in RuntimeProbeConfig.dockerFamily {
             let subState = runtimeStates[config.label] ?? .notInstalled
-            guard let statusItem = subStatusItems[config.label],
+            // Docker Desktop (o Docker "padrao") sempre aparece: ausente vira
+            // "Not Installed", para nao parecer que o app nem o considera.
+            let alwaysListed = config.label == RuntimeProbeConfig.dockerDesktop.label
+            guard subState != .notInstalled || alwaysListed,
+                  let statusItem = subStatusItems[config.label],
                   let actionItem = subActionItems[config.label] else { continue }
-            if subState != .notInstalled {
-                statusItem.title = "\(config.label): \(subState == .running ? "Running" : "Not Running")"
-                statusItem.toolTip = runtimeInfo[config.label]
-                statusItem.attributedTitle = NSAttributedString(
-                    string: statusItem.title,
-                    attributes: [.font: NSFont.menuFont(ofSize: 11),
-                                 .foregroundColor: NSColor.secondaryLabelColor])
-                statusItem.isEnabled = false
-                dockerSubmenu.append(statusItem)
-                if config.control != nil {
-                    if runtimeActivity[config.label] == true {
-                        actionItem.title = "Working..."
-                        actionItem.isEnabled = false
-                    } else if config.appBased {
-                        actionItem.title = subState == .running ? "Stop \(config.label)" : "Start \(config.label)"
-                        actionItem.isEnabled = true
-                    } else {
-                        actionItem.title = subState == .running ? "Disable Daemon" : "Enable Daemon"
-                        actionItem.isEnabled = true
-                    }
-                    actionItem.indentationLevel = 1
-                    actionItem.attributedTitle = NSAttributedString(
-                        string: actionItem.title,
-                        attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)])
-                    dockerSubmenu.append(actionItem)
-                }
+            let stateText = subState == .notInstalled ? "Not Installed"
+                : (subState == .running ? "Running" : "Not Running")
+            statusItem.title = "\(config.label): \(stateText)"
+            statusItem.toolTip = runtimeInfo[config.label]
+            statusItem.isEnabled = false
+            dockerStatus.append(statusItem)
+            guard config.control != nil, subState != .notInstalled else { continue }
+            let running = subState == .running
+            if runtimeActivity[config.label] == true {
+                actionItem.title = config.appBased
+                    ? (running ? "Quitting \(config.label)..." : "Opening \(config.label)...")
+                    : (running ? "Stopping \(config.label)..." : "Starting \(config.label)...")
+                actionItem.isEnabled = false
+            } else {
+                actionItem.title = config.appBased
+                    ? (running ? "Quit \(config.label)" : "Open \(config.label)")
+                    : (running ? "Stop \(config.label)" : "Start \(config.label)")
+                actionItem.isEnabled = true
             }
+            dockerActions.append(actionItem)
         }
-        fillSubmenu(dockerRowItem, label: "Docker", actions: dockerSubmenu)
+        fillSubmenu(dockerRowItem, label: "Docker", status: dockerStatus, actions: dockerActions)
 
         // ---- Podman (bloco proprio) ----
         let podmanState = runtimeStates["Podman"] ?? .notInstalled
@@ -506,10 +523,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             lumeRowItem.toolTip = runtimeInfo["Lume"]
             lumeRowItem.indentationLevel = 1
             if runtimeActivity["Lume"] == true {
-                lumeDetectItem.title = "Working..."
+                lumeDetectItem.title = lumeState == .running ? "Stopping Lume..." : "Starting Lume..."
                 lumeDetectItem.isEnabled = false
             } else {
-                lumeDetectItem.title = lumeState == .running ? "Disable Daemon" : "Enable Daemon"
+                // Servico (brew services): Start/Stop, como Colima e Finch.
+                lumeDetectItem.title = lumeState == .running ? "Stop Lume" : "Start Lume"
                 lumeDetectItem.isEnabled = true
                 lumeDetectItem.target = self
                 lumeDetectItem.action = #selector(runtimeToggled(_:))
@@ -1097,33 +1115,40 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         controller.absorb(poll: (.running, nil),
                           runtimes: ["Docker": .running, "OrbStack": .running,
                                      "Colima": .notInstalled, "Docker Desktop": .notInstalled],
-                          info: ["Docker": "contexto: orbstack"],
+                          info: ["Docker": "\(RuntimeProbeConfig.docker.nature); Context: orbstack; Containers: 2"],
                           sequence: 2)
-        expect(controller.dockerRowItem.toolTip == "contexto: orbstack",
+        expect(controller.dockerRowItem.toolTip?.hasSuffix("Context: orbstack; Containers: 2") == true,
                "tooltip do docker vem do cache do poll, sem spawn na main")
-        expect(controller.dockerRowItem.title == "Docker: Running"
-               && controller.dockerDetectItem.title == "Detected",
-               "docker mostra estado e Detected")
-        expect(controller.subStatusItems["OrbStack"]?.menu != nil,
-               "OrbStack detectado entra como sub-item")
-        expect(controller.subStatusItems["OrbStack"]?.menu === controller.dockerRowItem.submenu
-               && controller.dockerDetectItem.menu === controller.dockerRowItem.submenu
-               && controller.dockerRowItem.isEnabled,
-               "deteccao e familia ficam no submenu da linha Docker, nao no menu principal")
-        expect(controller.dockerRowItem.submenu?.items.last?.title == "contexto: orbstack",
-               "submenu Docker termina com a informacao do poll")
-        expect(controller.subActionItems["OrbStack"]?.title == "Stop OrbStack"
-               && controller.subActionItems["OrbStack"]?.isEnabled == true,
-               "OrbStack rodando oferece Stop (nao Disable Daemon)")
-        expect(controller.subStatusItems["Colima"]?.menu == nil
-               && controller.subStatusItems["Docker Desktop"]?.menu == nil,
-               "providers nao detectados ficam fora do menu")
+        expect(controller.dockerRowItem.title == "Docker: Running" && controller.dockerRowItem.isEnabled
+               && controller.dockerDetectItem.menu == nil,
+               "docker detectado: estado na linha, sem aviso de CLI ausente")
+        // Secoes claras: o que e informacao (Status) e o que e clique (Actions).
+        expect(controller.dockerRowItem.submenu?.items.map(\.title)
+               == ["Status", "Context: orbstack", "Containers: 2", "OrbStack: Running", "Docker Desktop: Not Installed", "Actions", "Quit OrbStack"],
+               "submenu Docker: Status (dados, sem a descricao tecnica) e Actions")
+        expect(controller.dockerRowItem.submenu?.items.filter { $0.isEnabled }
+               == [controller.subActionItems["OrbStack"]].compactMap { $0 },
+               "so as acoes sao clicaveis no submenu Docker")
         controller.absorb(poll: (.running, nil),
-                          runtimes: ["Docker": .notInstalled, "OrbStack": .notInstalled],
-                          sequence: 3)
-        expect(controller.dockerDetectItem.title == "Not Detected"
+                          runtimes: ["Docker": .running, "OrbStack": .stopped], sequence: 3)
+        expect(controller.subActionItems["OrbStack"]?.title == "Open OrbStack",
+               "app parado oferece abrir o aplicativo")
+        expect(controller.subStatusItems["Colima"]?.menu == nil
+               && controller.subActionItems["Docker Desktop"]?.menu == nil,
+               "providers nao detectados ficam fora; Docker Desktop ausente sem acao")
+        controller.absorb(poll: (.running, nil),
+                          runtimes: ["Docker": .running, "Docker Desktop": .running], sequence: 4)
+        expect(controller.subStatusItems["Docker Desktop"]?.title == "Docker Desktop: Running"
+               && controller.subActionItems["Docker Desktop"]?.title == "Quit Docker Desktop",
+               "Docker Desktop instalado e de pe oferece fechar o aplicativo")
+        controller.absorb(poll: (.running, nil),
+                          runtimes: ["Docker": .notInstalled, "OrbStack": .notInstalled,
+                                     "Docker Desktop": .notInstalled],
+                          sequence: 5)
+        expect(controller.dockerRowItem.submenu?.items.map(\.title)
+               == ["Status", "Docker CLI not found", "Docker Desktop: Not Installed"]
                && controller.subStatusItems["OrbStack"]?.menu == nil,
-               "sem deteccao o bloco Docker esvazia a familia")
+               "sem deteccao: CLI ausente e o Docker padrao listado como nao instalado")
         expect(controller.dockerRowItem.toolTip == nil,
                "poll sem informacao limpa o tooltip anterior")
 
@@ -1153,8 +1178,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                                 runtimes: ["Colima": .stopped], sequence: 1)
         expect(colimaRow().menu != nil && colimaRow().isEnabled == false,
                "colima detectado entra como sub-item do bloco Docker")
-        expect(toggleController.subActionItems["Colima"]?.title == "Enable Daemon",
-               "colima parado oferece Enable Daemon")
+        expect(toggleController.subActionItems["Colima"]?.title == "Start Colima",
+               "colima (servico) parado oferece Start, nao Open")
         toggleController.subActionItems["Colima"]?.representedObject = "Colima"
         toggleController.runtimeToggled(toggleController.subActionItems["Colima"] ?? NSMenuItem())
         let deadline = Date().addingTimeInterval(5)
@@ -1258,21 +1283,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // Lima: bloco so aparece com limactl, linha informativa sem acao.
         expect(lumeController.limaRowItem.menu == nil, "lima fora do menu sem deteccao")
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped],
-                              info: ["Lima": "VMs Lima (limactl); instancias: default Stopped, docker Running"],
+                              info: ["Lima": "VMs Lima (limactl); Instances: default Stopped, docker Running"],
                               sequence: 2)
         let limaLines = lumeController.limaRowItem.submenu?.items ?? []
         expect(lumeController.limaRowItem.menu != nil && lumeController.limaRowItem.title == "Lima: Not Running"
                && lumeController.limaRowItem.isEnabled
-               && limaLines.map(\.title) == ["VMs Lima (limactl)", "instancias: default Stopped", "docker Running"]
+               && limaLines.map(\.title) == ["Status", "Instances: default Stopped", "docker Running"]
                && limaLines.map(\.indentationLevel) == [0, 0, 1]
                && limaLines.allSatisfy { !$0.isEnabled },
-               "lima detectado abre submenu com uma instancia por linha")
-        let firstLine = limaLines.first
+               "lima detectado abre submenu Status com uma instancia por linha, sem a descricao tecnica")
+        let firstLine = limaLines.dropFirst().first
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped],
-                              info: ["Lima": "VMs Lima (limactl); instancias: default Running, docker Running"],
+                              info: ["Lima": "VMs Lima (limactl); Instances: default Running, docker Running"],
                               sequence: 3)
-        expect(lumeController.limaRowItem.submenu?.items.first === firstLine
-               && lumeController.limaRowItem.submenu?.items[1].title == "instancias: default Running",
+        expect(lumeController.limaRowItem.submenu?.items[1] === firstLine
+               && lumeController.limaRowItem.submenu?.items[1].title == "Instances: default Running",
                "poll novo atualiza as linhas no lugar, sem recriar itens")
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped], sequence: 4)
         expect(lumeController.limaRowItem.submenu == nil && !lumeController.limaRowItem.isEnabled,
@@ -1289,7 +1314,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(lumeController.podmanActionItem.menu == nil, "podman sumido leva a acao junto")
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 7)
         expect(lumeController.lumeRowItem.menu != nil
-               && lumeController.lumeDetectItem.title == "Enable Daemon"
+               && lumeController.lumeDetectItem.title == "Start Lume"
                && lumeController.lumeDetectItem.menu === lumeController.lumeRowItem.submenu
                && lumeController.lumeRowItem.isEnabled,
                "lume detectado oferece habilitar o daemon no submenu da linha")

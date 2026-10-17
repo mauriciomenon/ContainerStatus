@@ -602,7 +602,7 @@ enum SelfTest {
         // sonda read-only; falha de comando = nil.
         _ = try stub("docker", dockerDirectory, stdout: "orbstack", exitCode: 0)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
-            .currentInfo() == "contexto: orbstack",
+            .currentInfo() == "Context: orbstack",
                "sonda informativa le o contexto do docker")
         _ = try bare("docker", dockerDirectory, exitCode: 1)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
@@ -719,7 +719,7 @@ enum SelfTest {
         _ = try stub("limactl", limaDirectory, stdout: "armbuild Stopped\ndefault Running", exitCode: 0)
         let limaProbe = RuntimeProbe(config: .lima, directories: [limaDirectory.path])
         expect(limaProbe.currentStatus().state == .running, "lima com instancia Running = ligado")
-        expect(limaProbe.currentInfo() == "instancias: armbuild Stopped, default Running",
+        expect(limaProbe.currentInfo() == "Instances: armbuild Stopped, default Running",
                "tooltip do lima lista todas as instancias")
         _ = try stub("limactl", limaDirectory, stdout: "armbuild Stopped\nRunningVM Stopped", exitCode: 0)
         expect(limaProbe.currentStatus().state == .stopped, "instancia parada com Running no nome nao engana")
@@ -733,7 +733,7 @@ enum SelfTest {
         let reused = CLIRunResult(exitCode: 0, spawned: true, stdout: "dev Running")
         try FileManager.default.removeItem(atPath: limaDirectory.appendingPathComponent("limactl").path)
         _ = try bare("limactl", limaDirectory, exitCode: 1)
-        expect(limaProbe.currentInfo(reusing: reused) == "instancias: dev Running",
+        expect(limaProbe.currentInfo(reusing: reused) == "Instances: dev Running",
                "tooltip do lima usa a saida do status sem rodar o limactl de novo")
         // Status que estourou o prazo: o tooltip tambem nao repete a consulta.
         let calls = limaDirectory.appendingPathComponent("limactl.calls").path
