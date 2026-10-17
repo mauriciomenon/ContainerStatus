@@ -4,6 +4,15 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Unreleased]
 
+### Alterado
+- Docker, Lume e Lima viram linhas com submenu: deteccao, acoes e
+  informacao (contexto, instancias do Lima) ficam dentro do submenu, nao
+  mais espalhadas no menu principal.
+- Rodape em linhas proprias: Refresh (antes o botao do cabecalho), About
+  e Quit na ultima linha. About virou submenu com o painel do app e os
+  links do GitHub de Apple Container, OrbStack, Lima e Lume (o item GitHub
+  saiu do bloco Apple).
+
 ## [1.1.1] - 2026-10-16
 
 ### Corrigido

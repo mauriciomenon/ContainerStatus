@@ -173,7 +173,7 @@ final class ContainerCLI: Sendable {
     func currentBinaryPath() -> String? { resolvedBinaryPath }
 
     /// Limpa as assinaturas de cache: a proxima leitura re-resolve e
-    /// re-probe a versao (varedura ativa do ⟳ do cabecalho).
+    /// re-probe a versao (varedura ativa do item Refresh).
     func rescan() {
         pathLock.withLock { $0.signatures = nil }
     }
@@ -378,7 +378,7 @@ final class ContainerCLI: Sendable {
     /// Consulta metadados a cada poll; executa --version somente apos mudancas.
     /// Resolucao com probe falho publica o resultado mas nao grava as
     /// assinaturas: o poll seguinte tenta de novo. Cachear o nil prendia o
-    /// app no binario e na versao antigos ate um novo upgrade ou o ⟳.
+    /// app no binario e na versao antigos ate um novo upgrade ou o Refresh.
     // ponytail: candidato que nunca responde versao e re-consultado a cada
     // poll (um --version de ~10ms); backoff so se isso aparecer de verdade.
     private func refreshBinaryPathIfNeeded() {

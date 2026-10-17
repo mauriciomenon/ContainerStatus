@@ -67,7 +67,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Linhas dos containers de pe (pool reutilizado, teto 8).
     private var containerRowItems: [NSMenuItem] = []
     private let actionItem = NSMenuItem()
-    private let githubItem = NSMenuItem()
     /// So aparece quando a release do GitHub supera a CLI instalada.
     private let updateItem = NSMenuItem()
     // Bloco Docker: daemon (sem toggle) + familia indentada (so detectados)
@@ -89,64 +88,26 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private let vmnetRowItem = NSMenuItem()
     private let vmnetActionItem = NSMenuItem()
     private let errorItem = NSMenuItem()
-    /// Rodape: About (esquerda) e Quit (direita) na mesma linha.
-    private let footerItem = NSMenuItem()
-    @MainActor
-    private lazy var footerView: NSView = {
-        @MainActor func footerButton(_ title: String, _ action: Selector) -> NSButton {
-            let button = NSButton(title: title, target: self, action: action)
-            button.isBordered = false
-            button.font = NSFont.menuFont(ofSize: 13)
-            button.contentTintColor = .labelColor
-            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-            return button
-        }
-        let aboutButton = footerButton("About", #selector(showAbout(_:)))
-        let quitButton = footerButton("Quit", #selector(quitClicked(_:)))
-        let stack = NSStackView(views: [aboutButton, NSView(), quitButton])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 8
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.minimumViewWidth, height: 26))
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 2),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2),
-        ])
-        footerItem.view = container
-        return container
-    }()
-    /// Cabecalho: titulo a esquerda, ⟳ de varedura no canto direito.
-    private let headerViewItem = NSMenuItem()
-    private lazy var headerView: NSView = {
-        let label = NSTextField(labelWithString: "Container Status \(appVersion ?? "")")
-        label.font = NSFont.boldSystemFont(ofSize: 13)
-        label.textColor = .labelColor
-        let rescanButton = NSButton(title: "⟳", target: self, action: #selector(headerClicked(_:)))
-        rescanButton.isBordered = false
-        rescanButton.font = NSFont.systemFont(ofSize: 15, weight: .medium)
-        rescanButton.contentTintColor = .secondaryLabelColor
-        rescanButton.toolTip = "Rescan detections"
-        // Area de clique generosa: o glifo e pequeno, o botao nao.
-        rescanButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 26).isActive = true
-        let stack = NSStackView(views: [label, NSView(), rescanButton])
-        stack.orientation = .horizontal
-        stack.spacing = 8
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: Self.minimumViewWidth, height: 26))
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 3),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -3),
-        ])
-        headerViewItem.view = container
-        return container
-    }()
+    /// Rodape: About (submenu com o painel e os links dos projetos) e Quit
+    /// na ultima linha.
+    private let aboutItem = NSMenuItem()
+    private let quitItem = NSMenuItem()
+    private let footerSep = NSMenuItem.separator()
+    /// Links do submenu About, na ordem exibida.
+    static let projectLinks: [(title: String, url: URL)] = [
+        ("Apple Container on GitHub", projectURL),
+        ("OrbStack on GitHub", URL(string: "https://github.com/orbstack/orbstack")!),
+        ("Lima on GitHub", URL(string: "https://github.com/lima-vm/lima")!),
+        ("Lume on GitHub", URL(string: "https://github.com/trycua/cua/tree/main/libs/lume")!),
+    ]
+    /// Linhas de informacao (cache do poll) de cada submenu de runtime,
+    /// reaproveitadas para o submenu aberto nao piscar a cada poll.
+    private var infoItemPools: [String: [NSMenuItem]] = [:]
+    private var infoSeparators: [String: NSMenuItem] = [:]
+    /// Cabecalho: titulo em negrito, linha de texto comum (sem view).
+    private let headerItem = NSMenuItem()
+    /// Varedura ativa (rescan da CLI + poll + release), linha do rodape.
+    private let refreshItem = NSMenuItem()
     private let sepDocker = NSMenuItem.separator()
     private let sepPodman = NSMenuItem.separator()
     private let sepLume = NSMenuItem.separator()
@@ -197,14 +158,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             exit(1)
         }
         // Sem menuNeedsUpdate: ele dispararia outro poll antes do exit.
-        controller.fitMenuWidth()
         controller.apply()
-        for item in controller.menu.items {
-            if item.isSeparatorItem { print("-----"); continue }
-            let text = item.view != nil ? "[view \(Int(item.view?.frame.width ?? 0))pt]" : item.title
-            let pad = String(repeating: "  ", count: item.indentationLevel)
-            print("\(pad)\(text.replacingOccurrences(of: "\n", with: " / "))\(item.isEnabled ? "" : "  (desabilitado)")")
+        func dump(_ items: [NSMenuItem], depth: Int) {
+            for item in items {
+                let lead = String(repeating: "      ", count: depth)
+                if item.isSeparatorItem { print("\(lead)-----"); continue }
+                let text = item.view != nil ? "[view \(Int(item.view?.frame.width ?? 0))pt]" : item.title
+                let pad = lead + String(repeating: "  ", count: item.indentationLevel)
+                let marks = (item.submenu != nil ? "  >" : "") + (item.isEnabled ? "" : "  (desabilitado)")
+                print("\(pad)\(text.replacingOccurrences(of: "\n", with: " / "))\(marks)")
+                if let submenu = item.submenu { dump(submenu.items, depth: depth + 1) }
+            }
         }
+        dump(controller.menu.items, depth: 0)
         print("largura do menu: \(Int(controller.menu.size.width))pt")
         exit(0)
     }
@@ -254,26 +220,18 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         statusLineItem.indentationLevel = 1
         actionItem.target = self
         actionItem.action = #selector(actionClicked(_:))
-        githubItem.title = "GitHub"
-        githubItem.indentationLevel = 1
-        githubItem.target = self
-        githubItem.action = #selector(openAppleAbout(_:))
         updateItem.indentationLevel = 1
         updateItem.target = self
         updateItem.action = #selector(openUpdate(_:))
-        dockerRowItem.isEnabled = false
         dockerRowItem.indentationLevel = 1
         dockerDetectItem.isEnabled = false
-        dockerDetectItem.indentationLevel = 1
         for probe in runtimes {
             guard let row = subStatusItems[probe.label] else { continue }
             row.isEnabled = false
-            row.indentationLevel = 1
             row.action = #selector(runtimeToggled(_:))
             row.target = self
             row.representedObject = probe.label
             if let action = subActionItems[probe.label] {
-                action.indentationLevel = 1
                 action.target = self
                 action.action = #selector(runtimeToggled(_:))
                 action.representedObject = probe.label
@@ -291,20 +249,99 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         loginItem.target = self
         loginItem.action = #selector(toggleLogin(_:))
 
-        _ = headerView
-        _ = footerView
+        let aboutMenu = NSMenu()
+        aboutMenu.autoenablesItems = false
+        let panelItem = NSMenuItem(title: "About ContainerStatus \(appVersion ?? "")",
+                                   action: #selector(showAbout(_:)), keyEquivalent: "")
+        panelItem.target = self
+        aboutMenu.addItem(panelItem)
+        aboutMenu.addItem(.separator())
+        for link in Self.projectLinks {
+            let linkItem = NSMenuItem(title: link.title, action: #selector(openLink(_:)), keyEquivalent: "")
+            linkItem.target = self
+            linkItem.representedObject = link.url
+            aboutMenu.addItem(linkItem)
+        }
+        aboutItem.title = "About"
+        aboutItem.submenu = aboutMenu
+        quitItem.title = "Quit"
+        quitItem.target = self
+        quitItem.action = #selector(quitClicked(_:))
+        refreshItem.title = "Refresh"
+        refreshItem.toolTip = "Rescan detections"
+        refreshItem.target = self
+        refreshItem.action = #selector(refreshClicked(_:))
+        headerItem.attributedTitle = NSAttributedString(
+            string: "Container Status \(appVersion ?? "")",
+            attributes: [.font: NSFont.boldSystemFont(ofSize: 13), .foregroundColor: NSColor.labelColor])
+        headerItem.isEnabled = false
+
         rebuildMenu()
     }
 
-    /// Esqueleto fixo: cabecalho com ⟳ no canto direito, e o rodape
-    /// About/Quit com o login na penultima linha. Todo o resto e zona
-    /// dinamica que o apply() reconstroi em ordem canonica.
+    /// Esqueleto fixo: cabecalho no topo; no fim Refresh, About (com
+    /// submenu) e Quit na ultima linha. Todo o resto e zona dinamica que o
+    /// apply() reconstroi em ordem canonica, terminando no login.
     private func rebuildMenu() {
         menu.removeAllItems()
-        menu.addItem(headerViewItem)
+        menu.addItem(headerItem)
         menu.addItem(firstSep)
-        menu.addItem(footerItem)
+        menu.addItem(footerSep)
+        menu.addItem(refreshItem)
+        menu.addItem(aboutItem)
+        menu.addItem(quitItem)
         apply()
+    }
+
+    /// Linhas do submenu a partir do tooltip ("natureza; rotulo: a, b; ..."):
+    /// uma por parte, e listas abertas um elemento por linha, indentado.
+    static func infoLines(_ info: String?) -> [(text: String, indent: Int)] {
+        guard let info else { return [] }
+        var lines: [(text: String, indent: Int)] = []
+        for part in info.components(separatedBy: "; ") where !part.isEmpty {
+            let elements = part.components(separatedBy: ", ")
+            lines.append((elements[0], 0))
+            lines += elements.dropFirst().map { ($0, 1) }
+        }
+        return lines
+    }
+
+    /// Submenu de um runtime: acoes primeiro, depois as linhas de informacao
+    /// do cache do poll (as mesmas do tooltip). So reatribui os itens quando
+    /// a lista muda: trocar com o submenu aberto o faria piscar a cada poll.
+    /// Sem conteudo, a linha fica sem submenu.
+    private func fillSubmenu(_ row: NSMenuItem, label: String, actions: [NSMenuItem]) {
+        let lines = Self.infoLines(runtimeInfo[label])
+        var pool = infoItemPools[label, default: []]
+        while pool.count < lines.count {
+            let line = NSMenuItem()
+            line.isEnabled = false
+            pool.append(line)
+        }
+        infoItemPools[label] = pool
+        for (index, line) in lines.enumerated() {
+            if pool[index].title != line.text { pool[index].title = line.text }
+            pool[index].indentationLevel = line.indent
+        }
+        var items = actions
+        if !actions.isEmpty && !lines.isEmpty {
+            let separator = infoSeparators[label] ?? NSMenuItem.separator()
+            infoSeparators[label] = separator
+            items.append(separator)
+        }
+        items += pool.prefix(lines.count)
+        row.isEnabled = !items.isEmpty
+        guard !items.isEmpty else {
+            row.submenu = nil
+            return
+        }
+        let submenu = row.submenu ?? {
+            let created = NSMenu()
+            created.autoenablesItems = false
+            row.submenu = created
+            return created
+        }()
+        if submenu.items != items { submenu.items = items }
     }
 
     /// Refreshes menu text and the status icon from the current state.
@@ -374,14 +411,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         actionItem.indentationLevel = 1
         actionItem.isEnabled = activity == .none && state != .notInstalled
         place(actionItem, present: state != .notInstalled)
-        place(githubItem, present: true)
         let update = UpstreamRelease.update(upstream, installed: cliVersion)
         if let update {
             updateItem.title = "Update available: \(update.version)"
         }
         place(updateItem, present: update != nil)
 
-        // ---- Bloco Docker: daemon sem toggle + familia indentada ----
+        // ---- Bloco Docker: linha com submenu (deteccao + familia) ----
         place(sepDocker, present: true)
         place(dockerRowItem, present: true)
         // Tooltips vem do cache montado fora da main (spawnPoll/finishRuntime):
@@ -390,23 +426,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         dockerRowItem.title = "Docker: \(dockerState == .running ? "Running" : "Not Running")"
         dockerRowItem.toolTip = runtimeInfo["Docker"]
         dockerDetectItem.title = dockerState == .notInstalled ? "Not Detected" : "Detected"
-        place(dockerDetectItem, present: true)
+        var dockerSubmenu = [dockerDetectItem]
 
         for config in RuntimeProbeConfig.dockerFamily {
             let subState = runtimeStates[config.label] ?? .notInstalled
             guard let statusItem = subStatusItems[config.label],
                   let actionItem = subActionItems[config.label] else { continue }
-            let detected = subState != .notInstalled
-            if detected {
+            if subState != .notInstalled {
                 statusItem.title = "\(config.label): \(subState == .running ? "Running" : "Not Running")"
                 statusItem.toolTip = runtimeInfo[config.label]
                 statusItem.attributedTitle = NSAttributedString(
                     string: statusItem.title,
                     attributes: [.font: NSFont.menuFont(ofSize: 11),
                                  .foregroundColor: NSColor.secondaryLabelColor])
-                statusItem.indentationLevel = 2
                 statusItem.isEnabled = false
-                place(statusItem, present: true)
+                dockerSubmenu.append(statusItem)
                 if config.control != nil {
                     if runtimeActivity[config.label] == true {
                         actionItem.title = "Working..."
@@ -418,19 +452,15 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                         actionItem.title = subState == .running ? "Disable Daemon" : "Enable Daemon"
                         actionItem.isEnabled = true
                     }
-                    actionItem.indentationLevel = 2
+                    actionItem.indentationLevel = 1
                     actionItem.attributedTitle = NSAttributedString(
                         string: actionItem.title,
                         attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)])
-                    place(actionItem, present: true)
-                } else {
-                    place(actionItem, present: false)
+                    dockerSubmenu.append(actionItem)
                 }
-            } else {
-                place(statusItem, present: false)
-                place(actionItem, present: false)
             }
         }
+        fillSubmenu(dockerRowItem, label: "Docker", actions: dockerSubmenu)
 
         // ---- Podman (bloco proprio) ----
         let podmanState = runtimeStates["Podman"] ?? .notInstalled
@@ -451,7 +481,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
         place(podmanActionItem, present: podmanState != .notInstalled)
 
-        // ---- Lume (bloco proprio, sem toggle) ----
+        // ---- Lume (linha com submenu: acao do daemon + informacao) ----
         let lumeState = runtimeStates["Lume"] ?? .notInstalled
         place(sepLume, present: lumeState != .notInstalled)
         place(lumeRowItem, present: lumeState != .notInstalled)
@@ -459,7 +489,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             lumeRowItem.title = "Lume: \(lumeState == .running ? "Running" : "Not Running")"
             lumeRowItem.toolTip = runtimeInfo["Lume"]
             lumeRowItem.indentationLevel = 1
-            lumeRowItem.isEnabled = false
             if runtimeActivity["Lume"] == true {
                 lumeDetectItem.title = "Working..."
                 lumeDetectItem.isEnabled = false
@@ -470,20 +499,17 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 lumeDetectItem.action = #selector(runtimeToggled(_:))
                 lumeDetectItem.representedObject = "Lume"
             }
-            lumeDetectItem.indentationLevel = 1
-            place(lumeDetectItem, present: true)
-        } else {
-            place(lumeDetectItem, present: false)
+            fillSubmenu(lumeRowItem, label: "Lume", actions: [lumeDetectItem])
         }
 
-        // ---- Lima (bloco proprio, somente leitura: instancias por nome) ----
+        // ---- Lima (linha com submenu somente leitura: instancias) ----
         let limaState = runtimeStates["Lima"] ?? .notInstalled
         place(sepLima, present: limaState != .notInstalled)
         if limaState != .notInstalled {
             limaRowItem.title = "Lima: \(limaState == .running ? "Running" : "Not Running")"
             limaRowItem.toolTip = runtimeInfo["Lima"]
             limaRowItem.indentationLevel = 1
-            limaRowItem.isEnabled = false
+            fillSubmenu(limaRowItem, label: "Lima", actions: [])
         }
         place(limaRowItem, present: limaState != .notInstalled)
 
@@ -719,25 +745,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         apply()
     }
 
-    /// Largura que cabecalho e rodape pedem sozinhos; a largura fixa de 260pt
-    /// era o que alargava o menu, nenhum item de texto chegava perto.
-    private static let minimumViewWidth: CGFloat = 150
-
-    /// Views no minimo que o conteudo pede; depois esticam ate o item de
-    /// texto mais largo, para cabecalho/rodape alinharem com o resto.
-    private func fitMenuWidth() {
-        for view in [headerView, footerView] {
-            let fitting = view.subviews.first?.fittingSize.width ?? 0
-            view.frame.size.width = max(Self.minimumViewWidth, fitting + 32)
-        }
-        let width = max(headerView.frame.width, footerView.frame.width, menu.size.width - 18)
-        headerView.frame.size.width = width
-        footerView.frame.size.width = width
-    }
-
     func menuNeedsUpdate(_ menu: NSMenu) {
         loginStatusCache = Self.loginStatus
-        fitMenuWidth()
         refreshNow()
         if activity == .none { apply() }
     }
@@ -822,9 +831,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
     }
 
-    // MARK: Varedura ativa (⟳ do cabecalho)
+    // MARK: Varedura ativa (item Refresh)
 
-    @objc private func headerClicked(_ sender: Any) {
+    @objc private func refreshClicked(_ sender: Any) {
         menu.cancelTracking()
         cli.rescan()
         refreshNow()
@@ -938,11 +947,28 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             return false
         }
 
-        // Estrutura inicial: cabecalho com ⟳ e rodape About/Quit fixos, sem
+        // Estrutura inicial: cabecalho e rodape Refresh/About/Quit fixos, sem
         // blocos (nada detectado com runtimes: [] e Fusion ausente), sem erro.
-        expect(controller.headerViewItem.menu != nil && controller.footerItem.menu != nil
-               && controller.loginItem.menu != nil,
-               "cabecalho, rodape e login fixos no menu")
+        expect(controller.headerItem.menu != nil && controller.loginItem.menu != nil,
+               "cabecalho e login fixos no menu")
+        let count = menu.numberOfItems
+        expect(count >= 4 && menu.items[count - 1] === controller.quitItem
+               && menu.items[count - 2] === controller.aboutItem
+               && menu.items[count - 3] === controller.refreshItem
+               && menu.items[count - 4].isSeparatorItem
+               && menu.items[count - 5] === controller.loginItem,
+               "rodape: login | sep | Refresh | About | Quit na ultima linha")
+        expect(menu.items.allSatisfy { $0.view == nil },
+               "nenhum item de view: cabecalho, refresh e rodape sao linhas de texto")
+        expect(controller.quitItem.action == #selector(quitClicked(_:))
+               && controller.refreshItem.action == #selector(refreshClicked(_:)),
+               "Quit e Refresh ligados as acoes")
+        let aboutEntries = controller.aboutItem.submenu?.items.filter { !$0.isSeparatorItem } ?? []
+        expect(aboutEntries.first?.action == #selector(showAbout(_:))
+               && aboutEntries.dropFirst().map { $0.representedObject as? URL }
+                  == StatusItemController.projectLinks.map { $0.url }
+               && aboutEntries.dropFirst().allSatisfy { $0.action == #selector(openLink(_:)) },
+               "submenu About: painel e links de Apple Container, OrbStack, Lima, Lume")
         expect(controller.appleRowItem.menu != nil && controller.dockerRowItem.menu != nil,
                "blocos Apple e Docker sempre presentes")
         expect(controller.podmanRowItem.menu == nil && controller.lumeRowItem.menu == nil,
@@ -952,19 +978,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(!hasConsecutiveSeparators(menu), "sem separadores consecutivos")
         expect(controller.errorItem.menu == nil, "menu inicia sem linha de erro")
 
-        // Header: view com titulo e botao de varedura no canto direito.
-        expect(controller.headerViewItem.view != nil
-               && controller.headerView.subviews.first?.subviews.contains(where: {
-                   $0 is NSButton
-               }) == true,
-               "cabecalho tem botao de varedura ao lado do titulo")
-        expect(controller.footerItem.view != nil,
-               "rodape About/Quit em item de view")
-        controller.fitMenuWidth()
         expect(controller.menu.size.width < 230,
-               "menu estreito: largura segue o conteudo (\(Int(controller.menu.size.width))pt), nao 260pt fixos")
-        expect(controller.headerView.frame.width == controller.footerView.frame.width,
-               "cabecalho e rodape com a mesma largura")
+               "menu estreito: largura segue o conteudo (\(Int(controller.menu.size.width))pt)")
 
         // Bloco Apple: estado, linhas de container com memoria, acao.
         let listTwo = [ContainerCLI.ContainerSummary(id: "web", memoryBytes: 2_147_483_648),
@@ -979,9 +994,6 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.actionItem.title == "Disable Daemon" && controller.actionItem.isEnabled
                && controller.actionItem.indentationLevel == 1,
                "acao do daemon em ingles, habilitada e indentada")
-        expect(controller.githubItem.menu != nil && controller.githubItem.title == "GitHub"
-               && controller.githubItem.indentationLevel == 1,
-               "GitHub presente e indentado no bloco Apple")
 
         // Aviso de release nova: so com CLI instalada mais velha que a do GitHub.
         let newer = UpstreamRelease(version: "9.9.9",
@@ -992,8 +1004,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.updateItem.menu != nil && controller.updateItem.title == "Update available: 9.9.9",
                "release nova no GitHub mostra o aviso no bloco Apple")
         expect(controller.menu.index(of: controller.updateItem)
-               == controller.menu.index(of: controller.githubItem) + 1,
-               "aviso de atualizacao logo abaixo do GitHub")
+               == controller.menu.index(of: controller.actionItem) + 1,
+               "aviso de atualizacao logo abaixo da acao do daemon")
         controller.cliVersion = "9.9.9"
         controller.apply()
         expect(controller.updateItem.menu == nil, "CLI atualizada some com o aviso")
@@ -1045,8 +1057,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "docker mostra estado e Detected")
         expect(controller.subStatusItems["OrbStack"]?.menu != nil,
                "OrbStack detectado entra como sub-item")
-        expect(controller.subStatusItems["OrbStack"]?.indentationLevel == 2,
-               "sub-item indentado dois niveis no bloco Docker")
+        expect(controller.subStatusItems["OrbStack"]?.menu === controller.dockerRowItem.submenu
+               && controller.dockerDetectItem.menu === controller.dockerRowItem.submenu
+               && controller.dockerRowItem.isEnabled,
+               "deteccao e familia ficam no submenu da linha Docker, nao no menu principal")
+        expect(controller.dockerRowItem.submenu?.items.last?.title == "contexto: orbstack",
+               "submenu Docker termina com a informacao do poll")
         expect(controller.subActionItems["OrbStack"]?.title == "Stop OrbStack"
                && controller.subActionItems["OrbStack"]?.isEnabled == true,
                "OrbStack rodando oferece Stop (nao Disable Daemon)")
@@ -1193,12 +1209,26 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // Lima: bloco so aparece com limactl, linha informativa sem acao.
         expect(lumeController.limaRowItem.menu == nil, "lima fora do menu sem deteccao")
         lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped],
-                              info: ["Lima": "instancias: default Stopped"], sequence: 2)
+                              info: ["Lima": "VMs Lima (limactl); instancias: default Stopped, docker Running"],
+                              sequence: 2)
+        let limaLines = lumeController.limaRowItem.submenu?.items ?? []
         expect(lumeController.limaRowItem.menu != nil && lumeController.limaRowItem.title == "Lima: Not Running"
-               && !lumeController.limaRowItem.isEnabled
-               && lumeController.limaRowItem.toolTip == "instancias: default Stopped",
-               "lima detectado mostra estado e instancias no tooltip")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .running], sequence: 3)
+               && lumeController.limaRowItem.isEnabled
+               && limaLines.map(\.title) == ["VMs Lima (limactl)", "instancias: default Stopped", "docker Running"]
+               && limaLines.map(\.indentationLevel) == [0, 0, 1]
+               && limaLines.allSatisfy { !$0.isEnabled },
+               "lima detectado abre submenu com uma instancia por linha")
+        let firstLine = limaLines.first
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped],
+                              info: ["Lima": "VMs Lima (limactl); instancias: default Running, docker Running"],
+                              sequence: 3)
+        expect(lumeController.limaRowItem.submenu?.items.first === firstLine
+               && lumeController.limaRowItem.submenu?.items[1].title == "instancias: default Running",
+               "poll novo atualiza as linhas no lugar, sem recriar itens")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lima": .stopped], sequence: 4)
+        expect(lumeController.limaRowItem.submenu == nil && !lumeController.limaRowItem.isEnabled,
+               "lima sem informacao fica sem submenu vazio")
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .running], sequence: 5)
         expect(lumeController.podmanActionItem.menu != nil
                && lumeController.podmanActionItem.title == "Disable Daemon"
                && lumeController.podmanActionItem.action == #selector(runtimeToggled(_:))
@@ -1206,12 +1236,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                && lumeController.menu.index(of: lumeController.podmanActionItem)
                   == lumeController.menu.index(of: lumeController.podmanRowItem) + 1,
                "podman detectado mostra a acao logo abaixo da linha")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .notInstalled], sequence: 4)
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Podman": .notInstalled], sequence: 6)
         expect(lumeController.podmanActionItem.menu == nil, "podman sumido leva a acao junto")
-        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 5)
+        lumeController.absorb(poll: (.running, nil), runtimes: ["Lume": .stopped], sequence: 7)
         expect(lumeController.lumeRowItem.menu != nil
-               && lumeController.lumeDetectItem.title == "Enable Daemon",
-               "lume detectado oferece habilitar o daemon")
+               && lumeController.lumeDetectItem.title == "Enable Daemon"
+               && lumeController.lumeDetectItem.menu === lumeController.lumeRowItem.submenu
+               && lumeController.lumeRowItem.isEnabled,
+               "lume detectado oferece habilitar o daemon no submenu da linha")
 
         // Poll em voo: um segundo pedido no meio e descartado, nao enfileirado.
         // Cadencia: 15s com menu fechado, 3s aberto, um unico timer.
@@ -1319,9 +1351,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         }
     }
 
-    @objc private func openAppleAbout(_ sender: NSMenuItem) {
+    @objc private func openLink(_ sender: NSMenuItem) {
         menu.cancelTracking()
-        NSWorkspace.shared.open(Self.projectURL)
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func showAbout(_ sender: NSMenuItem) {

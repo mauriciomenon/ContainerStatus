@@ -14,7 +14,7 @@ controla o servico Apple `container` (github.com/apple/container).
   O menu, nesta ordem:
 
 ```
-Container Status x.y.z        ⟳   rescan: CLI, sondas e release no GitHub
+Container Status x.y.z
 -----------------------------
 Apple Container x.y.z            versao da CLI em uso; "(running a.b.c,
                                  restart to update)" se o servico de pe
@@ -23,28 +23,32 @@ Apple Container x.y.z            versao da CLI em uso; "(running a.b.c,
   Status: Running (2 containers)
   web - 2048 MB                  containers de pe (ate 8, id e memoria)
   Enable Daemon / Disable Daemon oculto sem a CLI
-  GitHub                         abre github.com/apple/container
   Update available: x.y.z        so quando a release supera a instalada
 -----------------------------
-  Docker: Running / Not Running  daemon (sem toggle; tooltip: contexto)
-  Detected / Not Detected
-    OrbStack, Colima, Docker     so os detectados, com Start/Stop ou
-    Desktop, Rancher, Finch      Enable/Disable proprio
+  Docker: Running / Not Running >  submenu: Detected / Not Detected, os
+                                 detectados da familia (OrbStack, Colima,
+                                 Docker Desktop, Rancher, Finch) com
+                                 Start/Stop ou Enable/Disable proprio, e
+                                 o contexto do docker
 -----------------------------    blocos abaixo so quando detectados
   Podman: ...  + Enable/Disable Daemon
-  Lume: ...    + Enable/Disable Daemon (servico brew lume serve)
-  Lima: ...    somente leitura; tooltip lista "nome estado" das instancias
+  Lume: ...  >   submenu: Enable/Disable Daemon (brew lume serve) + info
+  Lima: ...  >   submenu somente leitura: uma instancia por linha
   VMware vmnet: Running - 1 VM + Enable Daemon (senha de admin; sem desligar)
 -----------------------------
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Open at Login                    SMAppService, sem permissoes extras
-About                      Quit
+-----------------------------
+Refresh                          rescan: CLI, sondas e release no GitHub
+About  >                         painel do app + GitHub de Apple Container,
+                                 OrbStack, Lima e Lume
+Quit
 ```
 
 - A linha de erro de um toggle que falhou permanece visivel (nao e apagada
   pelo poll seguinte nem ao reabrir o menu); ela sai quando a operacao
   seguinte tem exito ou quando um poll traz um diagnostico proprio.
-- **Sobre ContainerStatus**: painel centralizado com autor, commit-base do
+- **About > About ContainerStatus**: painel centralizado com autor, commit-base do
   build, link do repositorio, data de build ISO e GPL 2.0 na ultima linha.
 - Deteccao por polling da CLI oficial `container system status` (codigo de
   saida) a cada 15s com o menu fechado e 3s com ele aberto, com watchdog de 2s. Start e stop tem watchdog de 40s
@@ -117,7 +121,7 @@ Cobertura por metodo de instalacao: **.pkg do site** (instala em
 `/usr/local/bin` no Intel) e **build manual** (qualquer prefixo, contanto
 que o binario `container` esteja em um dos diretorios acima ou no PATH do
 usuario). Enquanto a CLI nao existe, o ponto fica cinza e a acao do daemon
-some (o item GitHub continua levando ao projeto); assim que ela aparece em
+some (About > Apple Container on GitHub continua levando ao projeto); assim que ela aparece em
 qualquer um desses lugares, o proximo poll (ate 15s; 3s com o menu aberto) detecta e o menu passa
 a oferecer ligar/desligar - sem reiniciar o app.
 
