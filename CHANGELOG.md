@@ -13,6 +13,8 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 - Linhas de status dos providers na cor normal (estavam cinza).
 
 ### Alterado
+- Docker Desktop e Rancher Desktop abrem e fecham pelo bundle id do app,
+  com o nome como reserva.
 - Submenus com secoes Status (dados) e Actions (cliques). Na familia
   Docker, provider que e aplicativo (Docker Desktop, Rancher Desktop)
   oferece Open/Quit e motor ou servico (OrbStack, Colima, Finch) oferece

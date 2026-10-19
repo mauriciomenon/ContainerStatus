@@ -845,6 +845,38 @@ enum SelfTest {
         expect(controllable.stop().succeeded, "stop do runtime tem exit 0")
         expect(controllable.currentStatus().state == .stopped, "apos stop = desligado")
 
+        // App por bundle id com nome de reserva: id recusado cai no nome;
+        // id aceito nao repete. O log registra cada chamada.
+        let appStub = stoppedDirectory.appendingPathComponent("appctl").path
+        try """
+        #!/bin/sh
+        echo "$1 $2" >> "$0.log"
+        [ "$2" = com.id.ruim ] && exit 1
+        exit 0
+        """.write(toFile: appStub, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appStub)
+        func appProbe(_ id: String) -> RuntimeProbe {
+            // Receita real, so com o binario trocado pelo stub.
+            let real = RuntimeControl.app(bundleID: id, name: "Nome")
+            let control = RuntimeControl(startBinary: appStub, startArguments: real.startArguments, startTimeout: 5,
+                                         stopBinary: appStub, stopArguments: real.stopArguments, stopTimeout: 5,
+                                         startFallbackArguments: real.startFallbackArguments,
+                                         stopFallbackArguments: real.stopFallbackArguments)
+            return RuntimeProbe(config: RuntimeProbeConfig(label: "App", binaryName: appStub, statusArguments: [],
+                                                           interpret: { _ in .stopped }, control: control))
+        }
+        let readLog = { (try? String(contentsOfFile: appStub + ".log", encoding: .utf8)) ?? "" }
+        expect(appProbe("com.id.ruim").start().succeeded && readLog() == "-b com.id.ruim\n-a Nome\n",
+               "open por bundle id recusado cai no nome")
+        try? FileManager.default.removeItem(atPath: appStub + ".log")
+        expect(appProbe("com.id.bom").start().succeeded && readLog() == "-b com.id.bom\n",
+               "bundle id aceito nao tenta o nome")
+        expect(RuntimeProbeConfig.dockerDesktop.control?.startArguments == ["-b", "com.docker.docker"]
+               && RuntimeProbeConfig.dockerDesktop.control?.stopFallbackArguments == ["-e", "quit app \"Docker\""]
+               && RuntimeProbeConfig.rancherDesktop.control?.stopArguments
+                   == ["-e", "quit app id \"io.rancherdesktop.app\""],
+               "Docker Desktop e Rancher por bundle id, nome de reserva")
+
         // Sem receita (docker read-only): start/stop nao executam nada.
         let readOnly = RuntimeProbe(config: .docker, directories: [stoppedDirectory.path])
         expect(!readOnly.isControllable, "docker read-only nao tem controle")

@@ -890,7 +890,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         Task.detached(priority: .userInitiated) { [weak self] in
             let result = turningOff ? probe.stop() : probe.start()
             // Controle pode retornar antes do runtime terminar de subir
-            // (ex.: open -a do Docker Desktop e imediato, o app ainda nao responde);
+            // (ex.: open do Docker Desktop e imediato, o app ainda nao responde);
             // sondar com retry curto antes de decidir o estado final.
             var state = probe.currentStatus().state
             if result.exitedCleanly {

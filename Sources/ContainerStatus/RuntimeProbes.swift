@@ -89,9 +89,26 @@ struct RuntimeControl: Sendable {
     let stopBinary: String
     let stopArguments: [String]
     let stopTimeout: TimeInterval
+    /// Segunda tentativa no mesmo binario quando a primeira falha sem
+    /// estourar o prazo (app: bundle id primeiro, nome como reserva).
+    var startFallbackArguments: [String]? = nil
+    var stopFallbackArguments: [String]? = nil
 }
 
 extension RuntimeControl {
+    /// App de provider: abre e fecha pelo bundle id, que nao depende do nome
+    /// exibido nem pega outro app com o mesmo nome; o nome fica de reserva
+    /// para build renomeada ou id diferente. Id inexistente falha rapido
+    /// (open -b exit 1, "quit app id" erro -1728), sem dialogo.
+    static func app(bundleID: String, name: String) -> RuntimeControl {
+        RuntimeControl(startBinary: "/usr/bin/open", startArguments: ["-b", bundleID],
+                       startTimeout: 60,
+                       stopBinary: "/usr/bin/osascript",
+                       stopArguments: ["-e", "quit app id \"\(bundleID)\""], stopTimeout: 60,
+                       startFallbackArguments: ["-a", name],
+                       stopFallbackArguments: ["-e", "quit app \"\(name)\""])
+    }
+
     /// Controle pelo proprio binario do runtime.
     static func selfBinary(binaryName: String, startArguments: [String], startTimeout: TimeInterval,
                            stopArguments: [String], stopTimeout: TimeInterval) -> RuntimeControl {
@@ -218,11 +235,7 @@ extension RuntimeProbeConfig {
         label: "Docker Desktop", binaryName: "/usr/bin/pgrep",
         statusArguments: ["-f", "^/Applications/Docker.app/Contents/MacOS/"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
-        control: RuntimeControl(
-            startBinary: "/usr/bin/open", startArguments: ["-a", "Docker"],
-            startTimeout: 60,
-            stopBinary: "/usr/bin/osascript",
-            stopArguments: ["-e", "quit app \"Docker\""], stopTimeout: 60),
+        control: .app(bundleID: "com.docker.docker", name: "Docker"),
         detectAppPath: "/Applications/Docker.app",
         nature: "app Docker Desktop + daemon proprio",
         appBased: true
@@ -233,11 +246,7 @@ extension RuntimeProbeConfig {
         label: "Rancher Desktop", binaryName: "/usr/bin/pgrep",
         statusArguments: ["-f", "^/Applications/Rancher Desktop.app/Contents/MacOS/"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
-        control: RuntimeControl(
-            startBinary: "/usr/bin/open",
-            startArguments: ["-a", "Rancher Desktop"], startTimeout: 60,
-            stopBinary: "/usr/bin/osascript",
-            stopArguments: ["-e", "quit app \"Rancher Desktop\""], stopTimeout: 60),
+        control: .app(bundleID: "io.rancherdesktop.app", name: "Rancher Desktop"),
         detectAppPath: "/Applications/Rancher Desktop.app",
         nature: "app Rancher Desktop + VM (backbone docker)",
         appBased: true
@@ -478,21 +487,27 @@ final class RuntimeProbe: Sendable {
 
     private func runControl(_ pair: (binary: KeyPath<RuntimeControl, String>,
                                      arguments: KeyPath<RuntimeControl, [String]>,
-                                     timeout: KeyPath<RuntimeControl, TimeInterval>)) -> CLIRunResult {
+                                     timeout: KeyPath<RuntimeControl, TimeInterval>,
+                                     fallback: KeyPath<RuntimeControl, [String]?>)) -> CLIRunResult {
         guard let control = config.control,
               let binary = resolveControlBinary(control[keyPath: pair.binary]) else {
             return CLIRunResult(stderr: "runtime \(config.label) indisponivel")
         }
-        return ContainerCLI.runBinary(binary, arguments: control[keyPath: pair.arguments],
-                                      timeout: control[keyPath: pair.timeout])
+        let timeout = control[keyPath: pair.timeout]
+        let first = ContainerCLI.runBinary(binary, arguments: control[keyPath: pair.arguments], timeout: timeout)
+        // Reserva so em falha rapida: depois de um timeout o prazo ja foi
+        // gasto e repetir dobraria a espera do watchdog.
+        guard !first.succeeded, first.spawned, !first.timedOut,
+              let fallback = control[keyPath: pair.fallback] else { return first }
+        return ContainerCLI.runBinary(binary, arguments: fallback, timeout: timeout)
     }
 
     func start() -> CLIRunResult {
-        runControl((\.startBinary, \.startArguments, \.startTimeout))
+        runControl((\.startBinary, \.startArguments, \.startTimeout, \.startFallbackArguments))
     }
 
     func stop() -> CLIRunResult {
-        runControl((\.stopBinary, \.stopArguments, \.stopTimeout))
+        runControl((\.stopBinary, \.stopArguments, \.stopTimeout, \.stopFallbackArguments))
     }
 
     /// Informacao de planta (ex.: contexto do docker), ou nil quando o
