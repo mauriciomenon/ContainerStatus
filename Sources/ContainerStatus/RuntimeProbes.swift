@@ -96,16 +96,16 @@ struct RuntimeControl: Sendable {
 }
 
 extension RuntimeControl {
-    /// App de provider: abre e fecha pelo bundle id, que nao depende do nome
-    /// exibido nem pega outro app com o mesmo nome; o nome fica de reserva
-    /// para build renomeada ou id diferente. Id inexistente falha rapido
-    /// (open -b exit 1, "quit app id" erro -1728), sem dialogo.
-    static func app(bundleID: String, name: String) -> RuntimeControl {
-        RuntimeControl(startBinary: "/usr/bin/open", startArguments: ["-b", bundleID],
+    /// App de provider: abre pelo caminho (o mesmo que o status confere; o
+    /// bundle id poderia pegar a copia de um DMG montado) com o bundle id de
+    /// reserva; fecha pelo bundle id com o nome de reserva. Alvo inexistente
+    /// falha rapido (open exit 1, "quit app id" erro -1728), sem dialogo.
+    static func app(path: String, bundleID: String, name: String) -> RuntimeControl {
+        RuntimeControl(startBinary: "/usr/bin/open", startArguments: [path],
                        startTimeout: 60,
                        stopBinary: "/usr/bin/osascript",
                        stopArguments: ["-e", "quit app id \"\(bundleID)\""], stopTimeout: 60,
-                       startFallbackArguments: ["-a", name],
+                       startFallbackArguments: ["-b", bundleID],
                        stopFallbackArguments: ["-e", "quit app \"\(name)\""])
     }
 
@@ -235,7 +235,7 @@ extension RuntimeProbeConfig {
         label: "Docker Desktop", binaryName: "/usr/bin/pgrep",
         statusArguments: ["-f", "^/Applications/Docker.app/Contents/MacOS/"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
-        control: .app(bundleID: "com.docker.docker", name: "Docker"),
+        control: .app(path: "/Applications/Docker.app", bundleID: "com.docker.docker", name: "Docker"),
         detectAppPath: "/Applications/Docker.app",
         nature: "app Docker Desktop + daemon proprio",
         appBased: true
@@ -246,7 +246,7 @@ extension RuntimeProbeConfig {
         label: "Rancher Desktop", binaryName: "/usr/bin/pgrep",
         statusArguments: ["-f", "^/Applications/Rancher Desktop.app/Contents/MacOS/"],
         interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
-        control: .app(bundleID: "io.rancherdesktop.app", name: "Rancher Desktop"),
+        control: .app(path: "/Applications/Rancher Desktop.app", bundleID: "io.rancherdesktop.app", name: "Rancher Desktop"),
         detectAppPath: "/Applications/Rancher Desktop.app",
         nature: "app Rancher Desktop + VM (backbone docker)",
         appBased: true

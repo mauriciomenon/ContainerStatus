@@ -503,11 +503,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         // ---- Podman (bloco proprio) ----
         let podmanState = runtimeStates["Podman"] ?? .notInstalled
-        place(podmanRowItem, present: podmanState != .notInstalled)
+        // Linha sempre presente (como Docker Desktop); so a acao some sem Podman.
+        place(podmanRowItem, present: true)
+        podmanRowItem.title = "Podman: " + (podmanState == .notInstalled ? "Not Installed"
+            : (podmanState == .running ? "Running" : "Not Running"))
+        podmanRowItem.toolTip = runtimeInfo["Podman"]
+        podmanRowItem.indentationLevel = 1
         if podmanState != .notInstalled {
-            podmanRowItem.title = "Podman: \(podmanState == .running ? "Running" : "Not Running")"
-            podmanRowItem.toolTip = runtimeInfo["Podman"]
-            podmanRowItem.indentationLevel = 1
             if runtimeActivity["Podman"] == true {
                 podmanActionItem.title = "Working..."
                 podmanActionItem.isEnabled = false
@@ -1083,8 +1085,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         controller.apply()
         expect(controller.appleRowItem.menu != nil && controller.dockerRowItem.menu != nil,
                "blocos Apple e Docker sempre presentes")
-        expect(controller.podmanRowItem.menu == nil && controller.lumeRowItem.menu == nil,
-               "podman e lume fora do menu quando nao detectados")
+        expect(controller.podmanRowItem.menu != nil && controller.podmanRowItem.title == "Podman: Not Installed"
+               && controller.podmanActionItem.menu == nil && controller.lumeRowItem.menu == nil,
+               "podman fixo como Not Installed sem acao; lume fora do menu quando nao detectado")
         expect(controller.vmnetRowItem.menu == nil,
                "vmnet fora do menu sem Fusion")
         expect(!hasConsecutiveSeparators(menu), "sem separadores consecutivos")

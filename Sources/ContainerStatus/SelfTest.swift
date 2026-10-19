@@ -852,7 +852,7 @@ enum SelfTest {
         #!/bin/sh
         echo "$1 $2" >> "$0.log"
         case "$*" in
-          *com.id.ruim*) exit 1 ;;
+          *.ruim.app*|*quit*com.id.ruim*) exit 1 ;;
           *com.id.lento*) /bin/sleep 3; exit 1 ;;
           *com.id.cancela*) echo "execution error: User canceled. (-128)" >&2; exit 1 ;;
         esac
@@ -861,7 +861,7 @@ enum SelfTest {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appStub)
         func appProbe(_ id: String, timeout: TimeInterval = 5) -> RuntimeProbe {
             // Receita real, so com o binario trocado pelo stub.
-            let real = RuntimeControl.app(bundleID: id, name: "Nome")
+            let real = RuntimeControl.app(path: "/Apps/\(id).app", bundleID: id, name: "Nome")
             let control = RuntimeControl(startBinary: appStub, startArguments: real.startArguments, startTimeout: timeout,
                                          stopBinary: appStub, stopArguments: real.stopArguments, stopTimeout: timeout,
                                          startFallbackArguments: real.startFallbackArguments,
@@ -874,18 +874,18 @@ enum SelfTest {
             return (try? String(contentsOfFile: appStub + ".log", encoding: .utf8)) ?? ""
         }
         _ = readLog()
-        expect(appProbe("com.id.ruim").start().succeeded && readLog() == "-b com.id.ruim\n-a Nome\n",
-               "open por bundle id recusado cai no nome")
-        expect(appProbe("com.id.bom").start().succeeded && readLog() == "-b com.id.bom\n",
-               "bundle id aceito nao tenta o nome")
+        expect(appProbe("com.id.ruim").start().succeeded && readLog() == "/Apps/com.id.ruim.app \n-b com.id.ruim\n",
+               "open por caminho recusado cai no bundle id")
+        expect(appProbe("com.id.bom").start().succeeded && readLog() == "/Apps/com.id.bom.app \n",
+               "caminho aceito nao tenta o bundle id")
         expect(appProbe("com.id.ruim").stop().succeeded
                && readLog() == "-e quit app id \"com.id.ruim\"\n-e quit app \"Nome\"\n",
                "quit por bundle id recusado cai no nome")
         let slow = appProbe("com.id.lento", timeout: 1).start()
-        expect(slow.timedOut && readLog() == "-b com.id.lento\n", "timeout nao repete pelo nome")
+        expect(slow.timedOut && readLog() == "/Apps/com.id.lento.app \n", "timeout nao repete")
         expect(!appProbe("com.id.cancela").stop().succeeded && readLog() == "-e quit app id \"com.id.cancela\"\n",
                "quit cancelado pelo usuario (-128) nao repete pelo nome")
-        expect(RuntimeProbeConfig.dockerDesktop.control?.startArguments == ["-b", "com.docker.docker"]
+        expect(RuntimeProbeConfig.dockerDesktop.control?.startArguments == ["/Applications/Docker.app"]
                && RuntimeProbeConfig.dockerDesktop.control?.stopFallbackArguments == ["-e", "quit app \"Docker\""]
                && RuntimeProbeConfig.rancherDesktop.control?.stopArguments
                    == ["-e", "quit app id \"io.rancherdesktop.app\""],
