@@ -495,9 +495,12 @@ final class RuntimeProbe: Sendable {
         }
         let timeout = control[keyPath: pair.timeout]
         let first = ContainerCLI.runBinary(binary, arguments: control[keyPath: pair.arguments], timeout: timeout)
-        // Reserva so em falha rapida: depois de um timeout o prazo ja foi
-        // gasto e repetir dobraria a espera do watchdog.
-        guard !first.succeeded, first.spawned, !first.timedOut,
+        // Reserva so em falha rapida e explicita: depois de um timeout o prazo
+        // ja foi gasto (repetir dobraria a espera); sinal nao e recusa do id;
+        // exit 0 com saida cortada ja deu certo; -128 e o usuario cancelando
+        // o quit, e repetir pelo nome mostraria a confirmacao de novo.
+        guard first.spawned, !first.timedOut, !first.signaled, first.exitCode != 0,
+              !first.stderr.contains("(-128)"),
               let fallback = control[keyPath: pair.fallback] else { return first }
         return ContainerCLI.runBinary(binary, arguments: fallback, timeout: timeout)
     }

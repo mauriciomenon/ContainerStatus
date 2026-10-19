@@ -845,32 +845,46 @@ enum SelfTest {
         expect(controllable.stop().succeeded, "stop do runtime tem exit 0")
         expect(controllable.currentStatus().state == .stopped, "apos stop = desligado")
 
-        // App por bundle id com nome de reserva: id recusado cai no nome;
-        // id aceito nao repete. O log registra cada chamada.
+        // App por bundle id com nome de reserva. O stub decide pelo id em
+        // qualquer argumento (open -b ou quit app id) e registra cada chamada.
         let appStub = stoppedDirectory.appendingPathComponent("appctl").path
         try """
         #!/bin/sh
         echo "$1 $2" >> "$0.log"
-        [ "$2" = com.id.ruim ] && exit 1
+        case "$*" in
+          *com.id.ruim*) exit 1 ;;
+          *com.id.lento*) /bin/sleep 3; exit 1 ;;
+          *com.id.cancela*) echo "execution error: User canceled. (-128)" >&2; exit 1 ;;
+        esac
         exit 0
         """.write(toFile: appStub, atomically: false, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: appStub)
-        func appProbe(_ id: String) -> RuntimeProbe {
+        func appProbe(_ id: String, timeout: TimeInterval = 5) -> RuntimeProbe {
             // Receita real, so com o binario trocado pelo stub.
             let real = RuntimeControl.app(bundleID: id, name: "Nome")
-            let control = RuntimeControl(startBinary: appStub, startArguments: real.startArguments, startTimeout: 5,
-                                         stopBinary: appStub, stopArguments: real.stopArguments, stopTimeout: 5,
+            let control = RuntimeControl(startBinary: appStub, startArguments: real.startArguments, startTimeout: timeout,
+                                         stopBinary: appStub, stopArguments: real.stopArguments, stopTimeout: timeout,
                                          startFallbackArguments: real.startFallbackArguments,
                                          stopFallbackArguments: real.stopFallbackArguments)
             return RuntimeProbe(config: RuntimeProbeConfig(label: "App", binaryName: appStub, statusArguments: [],
                                                            interpret: { _ in .stopped }, control: control))
         }
-        let readLog = { (try? String(contentsOfFile: appStub + ".log", encoding: .utf8)) ?? "" }
+        let readLog = { () -> String in
+            defer { try? FileManager.default.removeItem(atPath: appStub + ".log") }
+            return (try? String(contentsOfFile: appStub + ".log", encoding: .utf8)) ?? ""
+        }
+        _ = readLog()
         expect(appProbe("com.id.ruim").start().succeeded && readLog() == "-b com.id.ruim\n-a Nome\n",
                "open por bundle id recusado cai no nome")
-        try? FileManager.default.removeItem(atPath: appStub + ".log")
         expect(appProbe("com.id.bom").start().succeeded && readLog() == "-b com.id.bom\n",
                "bundle id aceito nao tenta o nome")
+        expect(appProbe("com.id.ruim").stop().succeeded
+               && readLog() == "-e quit app id \"com.id.ruim\"\n-e quit app \"Nome\"\n",
+               "quit por bundle id recusado cai no nome")
+        let slow = appProbe("com.id.lento", timeout: 1).start()
+        expect(slow.timedOut && readLog() == "-b com.id.lento\n", "timeout nao repete pelo nome")
+        expect(!appProbe("com.id.cancela").stop().succeeded && readLog() == "-e quit app id \"com.id.cancela\"\n",
+               "quit cancelado pelo usuario (-128) nao repete pelo nome")
         expect(RuntimeProbeConfig.dockerDesktop.control?.startArguments == ["-b", "com.docker.docker"]
                && RuntimeProbeConfig.dockerDesktop.control?.stopFallbackArguments == ["-e", "quit app \"Docker\""]
                && RuntimeProbeConfig.rancherDesktop.control?.stopArguments
