@@ -4,6 +4,8 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-19
+
 ### Corrigido
 - OrbStack: "Quit" parava o motor e deixava o app aberto, e "Open" num app
   ja aberto nao religava; agora e Start/Stop via `orbctl`.
