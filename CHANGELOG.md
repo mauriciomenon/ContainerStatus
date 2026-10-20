@@ -4,6 +4,8 @@ Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-19
+
 ### Alterado
 - Docker Desktop e Rancher Desktop abrem pelo caminho em /Applications (bundle id de reserva): nao pegam mais a copia de um DMG montado.
 - Podman sempre listado no menu, como "Not Installed" quando ausente.

@@ -33,7 +33,7 @@ Apple Container
                                  app abre/fecha (Open/Quit Docker Desktop,
                                  Rancher Desktop); motor/servico liga e
                                  desliga (Start/Stop OrbStack, Colima, Finch)
-  Podman: ...  + Enable/Disable Daemon     (blocos so quando detectados)
+  Podman: ...  + Enable/Disable Daemon     (sempre listado; "Not Installed" se ausente)
   Lume: ...  >   Status (auto-start) + Actions: Start/Stop Lume
                  (servico brew lume serve)
   Lima: ...  >   Status somente leitura: uma instancia por linha
