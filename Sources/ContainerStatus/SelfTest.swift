@@ -845,8 +845,8 @@ enum SelfTest {
         expect(controllable.stop().succeeded, "stop do runtime tem exit 0")
         expect(controllable.currentStatus().state == .stopped, "apos stop = desligado")
 
-        // App por bundle id com nome de reserva. O stub decide pelo id em
-        // qualquer argumento (open -b ou quit app id) e registra cada chamada.
+        // App: open pelo caminho (sem reserva), quit por bundle id com nome de
+        // reserva. O stub decide pelo caminho ou id e registra cada chamada.
         let appStub = stoppedDirectory.appendingPathComponent("appctl").path
         try """
         #!/bin/sh
@@ -874,10 +874,10 @@ enum SelfTest {
             return (try? String(contentsOfFile: appStub + ".log", encoding: .utf8)) ?? ""
         }
         _ = readLog()
-        expect(appProbe("com.id.ruim").start().succeeded && readLog() == "/Apps/com.id.ruim.app \n-b com.id.ruim\n",
-               "open por caminho recusado cai no bundle id")
+        expect(!appProbe("com.id.ruim").start().succeeded && readLog() == "/Apps/com.id.ruim.app \n",
+               "open por caminho recusado nao cai no bundle id (copia de DMG)")
         expect(appProbe("com.id.bom").start().succeeded && readLog() == "/Apps/com.id.bom.app \n",
-               "caminho aceito nao tenta o bundle id")
+               "open por caminho aceito roda uma vez")
         expect(appProbe("com.id.ruim").stop().succeeded
                && readLog() == "-e quit app id \"com.id.ruim\"\n-e quit app \"Nome\"\n",
                "quit por bundle id recusado cai no nome")
@@ -887,9 +887,13 @@ enum SelfTest {
                "quit cancelado pelo usuario (-128) nao repete pelo nome")
         expect(RuntimeProbeConfig.dockerDesktop.control?.startArguments == ["/Applications/Docker.app"]
                && RuntimeProbeConfig.dockerDesktop.control?.stopFallbackArguments == ["-e", "quit app \"Docker\""]
+               && RuntimeProbeConfig.dockerDesktop.control?.startFallbackArguments == nil
+               && RuntimeProbeConfig.rancherDesktop.control?.startArguments == ["/Applications/Rancher Desktop.app"]
+               && RuntimeProbeConfig.rancherDesktop.control?.startArguments.first
+                   == RuntimeProbeConfig.rancherDesktop.detectAppPath
                && RuntimeProbeConfig.rancherDesktop.control?.stopArguments
                    == ["-e", "quit app id \"io.rancherdesktop.app\""],
-               "Docker Desktop e Rancher por bundle id, nome de reserva")
+               "Docker Desktop e Rancher: open pelo caminho, quit por bundle id com nome de reserva")
 
         // Sem receita (docker read-only): start/stop nao executam nada.
         let readOnly = RuntimeProbe(config: .docker, directories: [stoppedDirectory.path])

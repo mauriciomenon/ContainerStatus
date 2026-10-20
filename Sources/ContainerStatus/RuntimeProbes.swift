@@ -90,22 +90,22 @@ struct RuntimeControl: Sendable {
     let stopArguments: [String]
     let stopTimeout: TimeInterval
     /// Segunda tentativa no mesmo binario quando a primeira falha sem
-    /// estourar o prazo (app: bundle id primeiro, nome como reserva).
+    /// estourar o prazo (app: so o quit, id primeiro e nome de reserva; o
+    /// open nao tem reserva, porque o bundle id poderia abrir a copia de um
+    /// DMG montado).
     var startFallbackArguments: [String]? = nil
     var stopFallbackArguments: [String]? = nil
 }
 
 extension RuntimeControl {
-    /// App de provider: abre pelo caminho (o mesmo que o status confere; o
-    /// bundle id poderia pegar a copia de um DMG montado) com o bundle id de
-    /// reserva; fecha pelo bundle id com o nome de reserva. Alvo inexistente
-    /// falha rapido (open exit 1, "quit app id" erro -1728), sem dialogo.
+    /// App de provider: abre so pelo caminho (o mesmo que o status confere);
+    /// fecha pelo bundle id com o nome de reserva. Alvo inexistente falha
+    /// rapido (open exit 1, "quit app id" erro -1728), sem dialogo.
     static func app(path: String, bundleID: String, name: String) -> RuntimeControl {
         RuntimeControl(startBinary: "/usr/bin/open", startArguments: [path],
                        startTimeout: 60,
                        stopBinary: "/usr/bin/osascript",
                        stopArguments: ["-e", "quit app id \"\(bundleID)\""], stopTimeout: 60,
-                       startFallbackArguments: ["-b", bundleID],
                        stopFallbackArguments: ["-e", "quit app \"\(name)\""])
     }
 
