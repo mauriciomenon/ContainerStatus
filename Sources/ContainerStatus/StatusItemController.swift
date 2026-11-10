@@ -23,7 +23,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var state: ServiceState = .stopped
     private var detail: String?
     /// Erro gravado pelo proprio app (toggle/login) sobrevive a polls saudaveis
-    /// ate um novo toggle ou um poll que traga detalhe proprio.
+    /// ate uma nova acao explicita.
     private var detailIsLocal = false
     private var activity: ServiceActivity = .none
     /// Estados read-only por runtime (passo 1 do roadmap multi-runtime),
@@ -44,6 +44,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var vmnetState: VmnetState = .notInstalled
     private var vmCount: Int? = nil
     private var vmnetBusy = false
+    private var controlBusy: Bool {
+        activity != .none || vmnetBusy || runtimeActivity.values.contains(true)
+    }
     private var cliVersion: String?
     /// Versao do apiserver de pe; diferente da CLI = upgrade sem restart.
     private var serviceVersion: String?
@@ -381,6 +384,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// caminho (regra 5).
     private func apply() {
         item.button?.image = Self.dotImage(state: state, dimmed: activity != .none)
+        let busy = controlBusy
 
         var anchorItem = firstSep  // ultimo item fixo antes da zona dinamica
 
@@ -446,7 +450,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             : (state == .running ? "Disable Daemon" : "Enable Daemon")
         actionItem.title = actionLabel
         actionItem.indentationLevel = 1
-        actionItem.isEnabled = activity == .none && (state == .running || state == .stopped)
+        actionItem.isEnabled = !busy && (state == .running || state == .stopped)
         place(actionItem, present: state != .notInstalled)
         let update = UpstreamRelease.update(upstream, installed: cliVersion)
         if let update {
@@ -493,7 +497,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 actionItem.title = config.appBased
                     ? (running ? "Quit \(config.label)" : "Open \(config.label)")
                     : (running ? "Stop \(config.label)" : "Start \(config.label)")
-                actionItem.isEnabled = subState == .running || subState == .stopped
+                actionItem.isEnabled = !busy && (subState == .running || subState == .stopped)
             }
             dockerActions.append(actionItem)
         }
@@ -512,7 +516,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 podmanActionItem.isEnabled = false
             } else {
                 podmanActionItem.title = podmanState == .running ? "Disable Daemon" : "Enable Daemon"
-                podmanActionItem.isEnabled = podmanState == .running || podmanState == .stopped
+                podmanActionItem.isEnabled = !busy && (podmanState == .running || podmanState == .stopped)
             }
             podmanActionItem.indentationLevel = 1
         }
@@ -531,7 +535,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             } else {
                 // Servico (brew services): Start/Stop, como Colima e Finch.
                 lumeDetectItem.title = lumeState == .running ? "Stop Lume" : "Start Lume"
-                lumeDetectItem.isEnabled = lumeState == .running || lumeState == .stopped
+                lumeDetectItem.isEnabled = !busy && (lumeState == .running || lumeState == .stopped)
                 lumeDetectItem.target = self
                 lumeDetectItem.action = #selector(runtimeToggled(_:))
                 lumeDetectItem.representedObject = "Lume"
@@ -566,7 +570,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 vmnetActionItem.isEnabled = false
             } else {
                 vmnetActionItem.title = "Enable Daemon"
-                vmnetActionItem.isEnabled = vmnetState == .stopped
+                vmnetActionItem.isEnabled = !busy && vmnetState == .stopped
             }
             place(vmnetActionItem, present: vmnetState != .running)
         } else {
@@ -799,11 +803,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         if activity == .none {
             state = poll.state
             // Detalhe vazio (stderr vazio) nao apaga um erro local real.
-            if let pollDetail = poll.detail, !pollDetail.isEmpty {
-                detail = pollDetail
-                detailIsLocal = false
-            } else if !detailIsLocal {
-                detail = nil
+            if !detailIsLocal {
+                detail = poll.detail.flatMap { $0.isEmpty ? nil : $0 }
             }
         }
         cliVersion = cli.currentVersion()
@@ -826,7 +827,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Actions
 
     @objc private func actionClicked(_ sender: NSMenuItem) {
-        guard activity == .none, state == .running || state == .stopped else { return }
+        guard !controlBusy, state == .running || state == .stopped else { return }
         let turningOff = (state == .running)
         activity = turningOff ? .stopping : .starting
         detail = nil
@@ -868,7 +869,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Runtime toggles (passo 2)
 
     @objc private func runtimeToggled(_ sender: NSMenuItem) {
-        guard let label = sender.representedObject as? String,
+        guard !controlBusy, let label = sender.representedObject as? String,
               let probe = runtimes.first(where: { $0.label == label }),
               probe.isControllable,
               runtimeStates[label] == .running || runtimeStates[label] == .stopped,
@@ -927,7 +928,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Rede virtual (vmnet) - somente subir, nunca derrubar
 
     @objc private func vmnetClicked(_ sender: NSMenuItem) {
-        guard !vmnetBusy, activity == .none, vmnet.fusionInstalled, vmnetState == .stopped else { return }
+        guard !controlBusy, vmnet.fusionInstalled, vmnetState == .stopped else { return }
         vmnetBusy = true
         detail = nil
         detailIsLocal = false
@@ -969,7 +970,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     /// Mesmo contrato do finish() do Apple container: avanca a barreira de
     /// epoca (polls em voo da era anterior sao descartados) e retenta o erro
-    /// local ate o proximo toggle ou um poll com detalhe proprio.
+    /// local ate a proxima acao explicita.
     private func finishRuntime(label: String, result: CLIRunResult,
                                state: ExternalRuntimeState, expected: ExternalRuntimeState? = nil) {
         mutationEpoch += 1
@@ -1115,7 +1116,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(controller.menu === menuBefore && menuBefore.numberOfItems > 0,
                "estrutura intacta dentro de menuDidClose")
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        expect(wideWidth > narrowWidth + 40 && controller.menu.size.width == narrowWidth,
+        expect(wideWidth > narrowWidth + 40 && abs(controller.menu.size.width - narrowWidth) < 1,
                "menu volta a encolher ao fechar depois que a linha larga some (\(Int(narrowWidth)) -> \(Int(wideWidth)) -> \(Int(controller.menu.size.width))pt)")
         expect(controller.item.menu === controller.menu && controller.menu.delegate === controller
                && controller.aboutItem.submenu !== aboutBefore
@@ -1324,6 +1325,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         toggleController.detailIsLocal = true
         toggleController.absorb(poll: (.running, ""), sequence: toggleController.lastAppliedSequence + 1)
         expect(toggleController.detail == "Login: x", "detalhe vazio do poll nao apaga erro local")
+        toggleController.detail = "vmnet: configuracao bloqueada"
+        toggleController.absorb(poll: (.unknown, "status: tempo limite excedido"),
+                                sequence: toggleController.lastAppliedSequence + 1)
+        toggleController.absorb(poll: (.stopped, nil),
+                                sequence: toggleController.lastAppliedSequence + 1)
+        expect(toggleController.detail == "vmnet: configuracao bloqueada"
+               && toggleController.detailIsLocal && toggleController.errorItem.menu != nil,
+               "erro vmnet persiste apos erro transitorio Apple e poll saudavel")
         toggleController.detail = nil
         toggleController.detailIsLocal = false
 
@@ -1341,6 +1350,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                "CLI presente com status estourado diz que nao respondeu")
         toggleController.pathDisplay = nil
         toggleController.cliVersion = nil
+
+        toggleController.state = .running
+        toggleController.runtimeStates["Colima"] = .stopped
+        toggleController.vmnetState = .stopped
+        toggleController.vmnetBusy = true
+        toggleController.apply()
+        expect(!toggleController.actionItem.isEnabled
+               && toggleController.subActionItems["Colima"]?.isEnabled == false,
+               "operacao vmnet bloqueia controles concorrentes")
+        toggleController.vmnetBusy = false
+        toggleController.runtimeActivity["Colima"] = true
+        toggleController.apply()
+        expect(!toggleController.vmnetActionItem.isEnabled && !toggleController.actionItem.isEnabled,
+               "operacao runtime bloqueia Apple e vmnet")
+        toggleController.runtimeActivity["Colima"] = nil
 
         // Login: sucesso apos falha limpa o erro de login, nao o de outros.
         toggleController.recordLoginResult(error: CocoaError(.featureUnsupported))

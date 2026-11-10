@@ -552,6 +552,27 @@ enum SelfTest {
                "script de subida confere a assinatura VMware como root antes de subir")
         expect(script.components(separatedBy: "/usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin ./vmnet-cli").count == 2,
                "vmnet-cli roda somente start como root com ambiente zerado")
+        let vmnetLog = temporary.appendingPathComponent("vnetlib.log")
+        let oldLockLine = "VNLNetCfgLoad - Failed to lock config database file, error: Resource temporarily unavailable\n"
+        try oldLockLine.write(to: vmnetLog, atomically: true, encoding: .utf8)
+        let metadata = try FileManager.default.attributesOfItem(atPath: vmnetLog.path)
+        let logNumber = (metadata[.systemFileNumber] as? NSNumber)?.uint64Value ?? 0
+        let initialOffset = (metadata[.size] as? NSNumber)?.uint64Value ?? 0
+        let logWriter = try FileHandle(forWritingTo: vmnetLog)
+        try logWriter.seekToEnd()
+        try logWriter.write(contentsOf: Data("Outro evento recente\n".utf8))
+        expect(VmnetProbe.initializationFailureDetail(logPath: vmnetLog.path, after: initialOffset,
+                                                     fileNumber: logNumber) == nil,
+               "append alheio nao atribui lock antigo a tentativa atual")
+        try logWriter.write(contentsOf: Data(oldLockLine.utf8))
+        try logWriter.close()
+        expect(VmnetProbe.initializationFailureDetail(logPath: vmnetLog.path, after: initialOffset,
+                                                     fileNumber: logNumber)?.contains("networking.lck") == true,
+               "falha nova de lock mostra causa VMware")
+        expect(VmnetProbe.initializationFailureDetail(logPath: vmnetLog.path, after: initialOffset,
+                                                     fileNumber: logNumber + 1) == nil,
+               "log rotacionado nao mistura evidencias de outra tentativa")
+
         // Verificacao do shell elevado, rodada sem root: stub do usuario cai;
         // o Fusion real (root:wheel, assinado pela VMware) passa.
         let stubCheck = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", running.verificationShell() + "; echo OK"],

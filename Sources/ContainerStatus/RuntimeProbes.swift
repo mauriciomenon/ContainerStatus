@@ -421,9 +421,57 @@ final class VmnetProbe: Sendable {
         }
         // osascript com ambiente minimo: sem HOME do usuario e sem prefixos
         // gravaveis no PATH herdado pelo shell elevado.
-        return ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript()],
-                                      timeout: Self.startTimeout,
-                                      environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
+        var logStart: (offset: UInt64, fileNumber: UInt64)?
+        do {
+            let metadata = try FileManager.default.attributesOfItem(atPath: "/var/log/vnetlib")
+            if let size = metadata[.size] as? NSNumber,
+               let number = metadata[.systemFileNumber] as? NSNumber {
+                logStart = (size.uint64Value, number.uint64Value)
+            }
+        } catch { NSLog("vmnet: log indisponivel antes da tentativa: %@", error.localizedDescription) }
+        var result = ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript()],
+                                            timeout: Self.startTimeout,
+                                            environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
+        if !result.exitedCleanly && !result.stderr.contains("(-128)") {
+            NSLog("vmnet start: exit=%d timeout=%@ erro=%@", result.exitCode,
+                  String(result.timedOut), ContainerCLI.firstLine(result.stderr))
+            if result.stderr.contains("Failed to initialize"),
+               let logStart,
+               let cause = Self.initializationFailureDetail(after: logStart.offset, fileNumber: logStart.fileNumber) {
+                result.stderr = cause + "\n" + result.stderr
+            }
+        }
+        return result
+    }
+
+    /// Le apenas o final do log atualizado pela tentativa atual; nao recupera locks.
+    static func initializationFailureDetail(logPath: String = "/var/log/vnetlib", after offset: UInt64,
+                                            fileNumber: UInt64) -> String? {
+        do {
+            let url = URL(fileURLWithPath: logPath)
+            let handle = try FileHandle(forReadingFrom: url)
+            defer {
+                do { try handle.close() }
+                catch { NSLog("vmnet: falha ao fechar log: %@", error.localizedDescription) }
+            }
+            var metadata = stat()
+            guard fstat(handle.fileDescriptor, &metadata) == 0 else {
+                NSLog("vmnet: falha ao consultar log aberto: %s", strerror(errno))
+                return nil
+            }
+            guard UInt64(metadata.st_ino) == fileNumber else { return nil }
+            let end = try handle.seekToEnd()
+            guard end > offset else { return nil }
+            try handle.seek(toOffset: max(offset, end > 8192 ? end - 8192 : 0))
+            let data = try handle.read(upToCount: 8192) ?? Data()
+            let lines = String(decoding: data, as: UTF8.self).split(separator: "\n")
+            guard let failure = lines.last(where: { $0.contains("VNLNetCfgLoad") }),
+                  failure.contains("Failed to lock config database file") else { return nil }
+            return "Configuracao VMware bloqueada por networking.lck; detalhes em /var/log/vnetlib"
+        } catch {
+            NSLog("vmnet: falha ao ler diagnostico: %@", error.localizedDescription)
+            return nil
+        }
     }
 
     /// O binario roda como root apos a senha: se o usuario (ou quem roda

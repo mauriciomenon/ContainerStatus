@@ -79,6 +79,12 @@ O estado vmnet informa processos observados, sem prometer conectividade. Uma
 consulta falha nao equivale a processo ausente; a contagem de VMs e independente.
 A existencia de um LaunchAgent informa apenas configuracao encontrada, sem
 afirmar que o auto-start esta habilitado.
+Falhas de operacao permanecem visiveis no menu ate a proxima acao explicita,
+mesmo se a consulta de outro servico falhar e depois se recuperar. Controles
+nao executam em paralelo. No erro VMware `Failed to initialize`, o app consulta
+somente ate 8 KiB novos do log `vnetlib` para explicar um bloqueio confirmado
+da configuracao; nao remove locks automaticamente.
+
 
 **De onde vem o direito de startar/parar o daemon:** o servico Apple
 container nao e um daemon de sistema. Ele vive no dominio launchd do
