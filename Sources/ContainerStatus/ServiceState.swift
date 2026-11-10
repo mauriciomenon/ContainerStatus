@@ -6,16 +6,20 @@ enum ServiceState: Equatable, Sendable {
     case running
     /// Service is off; red dot.
     case stopped
-    /// No CLI found, or it did not answer `system status` in time; gray hollow dot.
+    /// No CLI found; gray hollow dot.
     case notInstalled
+    /// A consulta falhou; nao informa se o servico esta parado.
+    case unknown
 
-    /// Maps a `container system status` outcome to a state.
-    /// Exit 0 = running, exit 1 = not running (the CLI's documented output),
-    /// any other nonzero code is still "not usable now" (red), and a timeout
-    /// means the tool itself is wedged (treated as unavailable).
-    static func from(exitCode: Int32, timedOut: Bool) -> ServiceState {
-        if timedOut { return .notInstalled }
-        return exitCode == 0 ? .running : .stopped
+    /// Interpreta somente resultados completos da consulta de status.
+    static func from(_ result: CLIRunResult) -> ServiceState {
+        guard result.spawned, !result.timedOut, !result.signaled, !result.truncated else { return .unknown }
+        if result.exitCode == 0 { return .running }
+        let lines = (result.stdout + "\n" + result.stderr).split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let stopped = lines.contains("apiserver is not running")
+            || lines.contains("apiserver is not running and not registered with launchd")
+        return result.exitCode == 1 && stopped ? .stopped : .unknown
     }
 }
 

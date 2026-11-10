@@ -6,7 +6,8 @@ controla o servico Apple `container` (github.com/apple/container).
 ## O que faz
 
 - Ponto **verde** na menu bar: servico ligado. **Vermelho**: desligado.
-  **Cinza vazado**: CLI `container` indisponivel (nao instalada ou travada).
+  **Cinza vazado**: CLI `container` nao instalada. **Laranja**: estado
+  desconhecido por falha ou timeout da consulta; o controle fica desabilitado.
   Durante um toggle o dot fica esmaecido e o poll nao sobrescreve o estado
   (sem piscar no meio da transicao).
 - Clique abre o menu. Abrir o app de novo (Finder, Spotlight, `open`) com
@@ -37,7 +38,7 @@ Apple Container
   Lume: ...  >   Status (auto-start) + Actions: Start/Stop Lume
                  (servico brew lume serve)
   Lima: ...  >   Status somente leitura: uma instancia por linha
-  VMware vmnet: Running - 1 VM + Enable Daemon (senha de admin; sem desligar)
+  VMware vmnet: No processes observed - 1 VM + Enable Daemon (senha de admin; somente start)
 -----------------------------
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Open at Login                    SMAppService, sem permissoes extras
@@ -60,7 +61,7 @@ Quit
   saida) a cada 15s com o menu fechado e 3s com ele aberto, com watchdog de 2s. Start e stop tem watchdog de 40s
   (pior caso oficial: instalacao de kernel no start e parada de containers
   no stop). O fallback `--disable-kernel-install` roda so apos falha
-  explicita do start puro, nunca apos timeout (o bootstrap pode continuar
+  explicita do prompt de kernel sem entrada, nunca apos erro generico ou timeout (o bootstrap pode continuar
   no launchd). A operacao nao e cancelavel: o item fica desabilitado ate o
   resultado (pior caso ~80s: start de 40s com falha explicita seguido do
   fallback de 40s, mais o status final). O app nunca bloqueia a main thread.
@@ -73,7 +74,11 @@ pede senha nem autorizacao. Unica excecao em todo o app: "Enable Daemon"
 do VMware vmnet, que pede a senha de administrador do macOS (`osascript`,
 `do shell script ... with administrator privileges`) somente se o
 `vmnet-cli` e seu caminho forem do root, e o shell elevado confere a
-assinatura da VMware antes de executar.
+assinatura da VMware antes de executar somente `--start`, sem parada implicita.
+O estado vmnet informa processos observados, sem prometer conectividade. Uma
+consulta falha nao equivale a processo ausente; a contagem de VMs e independente.
+A existencia de um LaunchAgent informa apenas configuracao encontrada, sem
+afirmar que o auto-start esta habilitado.
 
 **De onde vem o direito de startar/parar o daemon:** o servico Apple
 container nao e um daemon de sistema. Ele vive no dominio launchd do

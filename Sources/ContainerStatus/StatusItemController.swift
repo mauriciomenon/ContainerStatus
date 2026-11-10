@@ -42,7 +42,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var containerItems: [ContainerCLI.ContainerSummary] = []
     /// Rede virtual do VMware (vmnet): estado, VMs e subida em voo.
     private var vmnetState: VmnetState = .notInstalled
-    private var vmCount = 0
+    private var vmCount: Int? = nil
     private var vmnetBusy = false
     private var cliVersion: String?
     /// Versao do apiserver de pe; diferente da CLI = upgrade sem restart.
@@ -446,7 +446,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             : (state == .running ? "Disable Daemon" : "Enable Daemon")
         actionItem.title = actionLabel
         actionItem.indentationLevel = 1
-        actionItem.isEnabled = activity == .none && state != .notInstalled
+        actionItem.isEnabled = activity == .none && (state == .running || state == .stopped)
         place(actionItem, present: state != .notInstalled)
         let update = UpstreamRelease.update(upstream, installed: cliVersion)
         if let update {
@@ -460,8 +460,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // Tooltips vem do cache montado fora da main (spawnPoll/finishRuntime):
         // tooltipInfo dispara processos e travaria o menu aqui.
         let dockerState = runtimeStates["Docker"] ?? .notInstalled
-        dockerRowItem.title = "Docker: " + (dockerState == .notInstalled ? "Not Installed"
-            : (dockerState == .running ? "Running" : "Not Running"))
+        dockerRowItem.title = "Docker: " + dockerState.displayLabel
         dockerRowItem.toolTip = runtimeInfo["Docker"]
         dockerDetectItem.title = "Docker CLI not found"
         // Status: CLI ausente (se for o caso) e o estado de cada provider
@@ -478,8 +477,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             guard subState != .notInstalled || alwaysListed,
                   let statusItem = subStatusItems[config.label],
                   let actionItem = subActionItems[config.label] else { continue }
-            let stateText = subState == .notInstalled ? "Not Installed"
-                : (subState == .running ? "Running" : "Not Running")
+            let stateText = subState.displayLabel
             statusItem.title = "\(config.label): \(stateText)"
             statusItem.toolTip = runtimeInfo[config.label]
             statusItem.isEnabled = false
@@ -495,7 +493,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 actionItem.title = config.appBased
                     ? (running ? "Quit \(config.label)" : "Open \(config.label)")
                     : (running ? "Stop \(config.label)" : "Start \(config.label)")
-                actionItem.isEnabled = true
+                actionItem.isEnabled = subState == .running || subState == .stopped
             }
             dockerActions.append(actionItem)
         }
@@ -505,8 +503,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let podmanState = runtimeStates["Podman"] ?? .notInstalled
         // Linha sempre presente (como Docker Desktop); so a acao some sem Podman.
         place(podmanRowItem, present: true)
-        podmanRowItem.title = "Podman: " + (podmanState == .notInstalled ? "Not Installed"
-            : (podmanState == .running ? "Running" : "Not Running"))
+        podmanRowItem.title = "Podman: " + podmanState.displayLabel
         podmanRowItem.toolTip = runtimeInfo["Podman"]
         podmanRowItem.indentationLevel = 1
         if podmanState != .notInstalled {
@@ -515,7 +512,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 podmanActionItem.isEnabled = false
             } else {
                 podmanActionItem.title = podmanState == .running ? "Disable Daemon" : "Enable Daemon"
-                podmanActionItem.isEnabled = true
+                podmanActionItem.isEnabled = podmanState == .running || podmanState == .stopped
             }
             podmanActionItem.indentationLevel = 1
         }
@@ -525,7 +522,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let lumeState = runtimeStates["Lume"] ?? .notInstalled
         place(lumeRowItem, present: lumeState != .notInstalled)
         if lumeState != .notInstalled {
-            lumeRowItem.title = "Lume: \(lumeState == .running ? "Running" : "Not Running")"
+            lumeRowItem.title = "Lume: \(lumeState.displayLabel)"
             lumeRowItem.toolTip = runtimeInfo["Lume"]
             lumeRowItem.indentationLevel = 1
             if runtimeActivity["Lume"] == true {
@@ -534,7 +531,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             } else {
                 // Servico (brew services): Start/Stop, como Colima e Finch.
                 lumeDetectItem.title = lumeState == .running ? "Stop Lume" : "Start Lume"
-                lumeDetectItem.isEnabled = true
+                lumeDetectItem.isEnabled = lumeState == .running || lumeState == .stopped
                 lumeDetectItem.target = self
                 lumeDetectItem.action = #selector(runtimeToggled(_:))
                 lumeDetectItem.representedObject = "Lume"
@@ -545,7 +542,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         // ---- Lima (linha com submenu somente leitura: instancias) ----
         let limaState = runtimeStates["Lima"] ?? .notInstalled
         if limaState != .notInstalled {
-            limaRowItem.title = "Lima: \(limaState == .running ? "Running" : "Not Running")"
+            limaRowItem.title = "Lima: \(limaState.displayLabel)"
             limaRowItem.toolTip = runtimeInfo["Lima"]
             limaRowItem.indentationLevel = 1
             fillSubmenu(limaRowItem, label: "Lima", actions: [])
@@ -556,8 +553,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let vmnetPresent = vmnetState != .notInstalled
         place(vmnetRowItem, present: vmnetPresent)
         if vmnetPresent {
-            var text = vmnetState == .running ? "VMware vmnet: Running" : "VMware vmnet: Not Running"
-            if vmCount > 0 {
+            var text = "VMware vmnet: " + (vmnetState == .running ? "Processes observed"
+                : (vmnetState == .stopped ? "No processes observed" : "Unknown"))
+            if let vmCount, vmCount > 0 {
                 text += vmCount == 1 ? " - 1 VM" : " - \(vmCount) VMs"
             }
             vmnetRowItem.title = text
@@ -568,7 +566,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 vmnetActionItem.isEnabled = false
             } else {
                 vmnetActionItem.title = "Enable Daemon"
-                vmnetActionItem.isEnabled = true
+                vmnetActionItem.isEnabled = vmnetState == .stopped
             }
             place(vmnetActionItem, present: vmnetState != .running)
         } else {
@@ -589,12 +587,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         switch state {
         case .running: item.button?.toolTip = "Apple Container\(versionSuffix): running"
         case .stopped: item.button?.toolTip = "Apple Container\(versionSuffix): stopped"
-        case .notInstalled:
-            // Timeout do status tambem cai aqui: com caminho resolvido a CLI
-            // existe e so nao respondeu.
-            item.button?.toolTip = pathDisplay == nil
-                ? "Apple Container: CLI not found"
-                : "Apple Container\(versionSuffix): not responding"
+        case .unknown: item.button?.toolTip = "Apple Container\(versionSuffix): unknown"
+        case .notInstalled: item.button?.toolTip = "Apple Container: CLI not found"
         }
 
         switch activity {
@@ -616,7 +610,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
 
         statusLineItem.title = activity != .none
             ? (state == .running ? "Status: Running" : "Status: Not Running")
-            : (state == .running ? "Status: Running\(statusSuffix())" : "Status: Not Running")
+            : (state == .running ? "Status: Running\(statusSuffix())"
+                : (state == .unknown ? "Status: Unknown" : (state == .notInstalled ? "Status: Not Installed" : "Status: Not Running")))
 
         loginItem.title = "Open at Login"
         loginItem.state = loginStatusCache == .enabled ? .on : .off
@@ -780,7 +775,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                         containers: [ContainerCLI.ContainerSummary]? = nil,
                         runtimes: [String: ExternalRuntimeState]? = nil,
                         info: [String: String]? = nil,
-                        vmnet: (state: VmnetState, vmCount: Int)? = nil,
+                        vmnet: (state: VmnetState, vmCount: Int?)? = nil,
                         sequence: Int, epoch: Int = Int.max) {
         guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
@@ -788,10 +783,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             self.vmnetState = vmnet.state
             self.vmCount = vmnet.vmCount
         }
-        if let containers {
-            containerItems = containers
-            containerCount = containers.count
-        }
+        containerItems = containers ?? []
+        containerCount = containers?.count
         if let runtimes {
             // Runtime com toggle em voo: finishRuntime e quem decide o estado;
             // o poll no meio faria a linha piscar para o estado anterior.
@@ -833,7 +826,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Actions
 
     @objc private func actionClicked(_ sender: NSMenuItem) {
-        guard activity == .none, state != .notInstalled else { return }
+        guard activity == .none, state == .running || state == .stopped else { return }
         let turningOff = (state == .running)
         activity = turningOff ? .stopping : .starting
         detail = nil
@@ -848,26 +841,25 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             // carga do poll anterior por ate 3s apos o toggle.
             let containers = cli.runningContainers()
             await MainActor.run { [weak self] in
-                self?.finish(result: result, poll: poll, containers: containers)
+                self?.finish(result: result, poll: poll, containers: containers,
+                             expected: turningOff ? .stopped : .running)
             }
         }
     }
 
     private func finish(result: CLIRunResult, poll: (state: ServiceState, detail: String?),
-                        containers: [ContainerCLI.ContainerSummary]? = nil) {
+                        containers: [ContainerCLI.ContainerSummary]? = nil, expected: ServiceState? = nil) {
         mutationEpoch += 1
         activity = .none
         state = poll.state
-        if let containers {
-            containerItems = containers
-            containerCount = containers.count
-        }
-        if result.exitedCleanly {
+        containerItems = containers ?? []
+        containerCount = containers?.count
+        if result.exitedCleanly && (expected == nil || poll.state == expected) {
             detail = poll.detail
             detailIsLocal = false
         } else {
-            let message = ContainerCLI.firstLine(result.stderr)
-            detail = message.isEmpty ? "Operacao falhou" : message
+            let message = result.exitedCleanly ? "" : ContainerCLI.firstLine(result.stderr)
+            detail = message.isEmpty ? "Operacao nao confirmada" : message
             detailIsLocal = true
         }
         apply()
@@ -879,6 +871,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         guard let label = sender.representedObject as? String,
               let probe = runtimes.first(where: { $0.label == label }),
               probe.isControllable,
+              runtimeStates[label] == .running || runtimeStates[label] == .stopped,
               runtimeActivity[label] != true else { return }
         // A direcao e a do rotulo que o usuario clicou: reler o estado aqui
         // podia transformar um "Start" clicado em stop, se o runtime subiu
@@ -905,7 +898,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 }
             }
             await MainActor.run { [weak self] in
-                self?.finishRuntime(label: label, result: result, state: state)
+                self?.finishRuntime(label: label, result: result, state: state,
+                                    expected: turningOff ? .stopped : .running)
             }
         }
     }
@@ -933,7 +927,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Rede virtual (vmnet) - somente subir, nunca derrubar
 
     @objc private func vmnetClicked(_ sender: NSMenuItem) {
-        guard !vmnetBusy, activity == .none, vmnet.fusionInstalled else { return }
+        guard !vmnetBusy, activity == .none, vmnet.fusionInstalled, vmnetState == .stopped else { return }
         vmnetBusy = true
         detail = nil
         detailIsLocal = false
@@ -942,26 +936,32 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         let probe = vmnet
         Task.detached(priority: .userInitiated) { [weak self] in
             let result = probe.start()
-            let status = probe.currentStatus()
+            var status = probe.currentStatus()
+            if result.exitedCleanly {
+                for _ in 0..<3 where status.state != .running {
+                    do { try await Task.sleep(for: .seconds(1)) } catch { break }
+                    status = probe.currentStatus()
+                }
+            }
             await MainActor.run { [weak self] in
                 self?.finishVmnet(result: result, state: status.state, vmCount: status.vmCount)
             }
         }
     }
 
-    private func finishVmnet(result: CLIRunResult, state: VmnetState, vmCount: Int) {
+    private func finishVmnet(result: CLIRunResult, state: VmnetState, vmCount: Int?) {
         mutationEpoch += 1
         vmnetBusy = false
         vmnetState = state
         self.vmCount = vmCount
         // Cancelar o dialogo de senha nao e falha: sai silencioso.
         let canceled = result.stderr.contains("(-128)")  // osascript: exit 1, erro -128
-        if result.exitedCleanly || canceled {
+        if (result.exitedCleanly && state == .running) || canceled {
             detail = nil
             detailIsLocal = false
         } else {
-            let message = ContainerCLI.firstLine(result.stderr)
-            detail = "vmnet: \(message.isEmpty ? "falha ao subir" : message)"
+            let message = result.exitedCleanly ? "" : ContainerCLI.firstLine(result.stderr)
+            detail = "vmnet: \(message.isEmpty ? "Subida nao confirmada; consulte o diagnostico VMware" : message)"
             detailIsLocal = true
         }
         apply()
@@ -971,16 +971,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// epoca (polls em voo da era anterior sao descartados) e retenta o erro
     /// local ate o proximo toggle ou um poll com detalhe proprio.
     private func finishRuntime(label: String, result: CLIRunResult,
-                               state: ExternalRuntimeState) {
+                               state: ExternalRuntimeState, expected: ExternalRuntimeState? = nil) {
         mutationEpoch += 1
         runtimeActivity[label] = nil
         runtimeStates[label] = state
-        if result.exitedCleanly {
+        if result.exitedCleanly && (expected == nil || state == expected) {
             detail = nil
             detailIsLocal = false
         } else {
-            let message = ContainerCLI.firstLine(result.stderr)
-            detail = "\(label): \(message.isEmpty ? "Operacao falhou" : message)"
+            let message = result.exitedCleanly ? "" : ContainerCLI.firstLine(result.stderr)
+            detail = "\(label): \(message.isEmpty ? "Operacao nao confirmada" : message)"
             detailIsLocal = true
         }
         apply()
@@ -1333,10 +1333,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         toggleController.apply()
         expect(toggleController.item.button?.toolTip == "Apple Container: CLI not found",
                "sem CLI o tooltip diz nao encontrada")
+        toggleController.state = .unknown
         toggleController.pathDisplay = "/usr/local/bin/container"
         toggleController.cliVersion = "1.5.0"
         toggleController.apply()
-        expect(toggleController.item.button?.toolTip == "Apple Container 1.5.0: not responding",
+        expect(toggleController.item.button?.toolTip == "Apple Container 1.5.0: unknown",
                "CLI presente com status estourado diz que nao respondeu")
         toggleController.pathDisplay = nil
         toggleController.cliVersion = nil
@@ -1362,6 +1363,29 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             state: .running, vmCount: 1)
         expect(toggleController.errorItem.menu == nil,
                "cancelar vmnet sai sem linha de erro")
+
+        toggleController.state = .unknown
+        toggleController.runtimeStates["Docker"] = .unknown
+        toggleController.runtimeStates["Colima"] = .unknown
+        toggleController.runtimeStates["Podman"] = .unknown
+        toggleController.vmnetState = .unknown
+        toggleController.apply()
+        expect(toggleController.statusLineItem.title == "Status: Unknown"
+               && !toggleController.actionItem.isEnabled,
+               "estado Apple desconhecido bloqueia toggle")
+        expect(toggleController.dockerRowItem.title == "Docker: Unknown"
+               && toggleController.subActionItems["Colima"]?.isEnabled == false
+               && !toggleController.podmanActionItem.isEnabled
+               && !toggleController.vmnetActionItem.isEnabled,
+               "estado desconhecido aparece e bloqueia controles externos")
+        toggleController.finishVmnet(result: CLIRunResult(exitCode: 0, spawned: true),
+                                    state: .stopped, vmCount: nil)
+        expect(toggleController.detailIsLocal && toggleController.errorItem.menu != nil,
+               "exit zero vmnet sem processo nao confirma subida")
+        toggleController.finishRuntime(label: "Colima",
+            result: CLIRunResult(exitCode: 0, spawned: true, stderr: "Starting..."), state: .stopped, expected: .running)
+        expect(toggleController.detailIsLocal && toggleController.detail == "Colima: Operacao nao confirmada",
+               "exit zero sem atingir estado esperado mantem erro")
 
         // Lume com toggle brew: detected-only quando brew ausente.
         let lumeController = StatusItemController(
@@ -1590,7 +1614,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private static let dotImages: [String: NSImage] = {
         var cache: [String: NSImage] = [:]
         for dimmed in [false, true] {
-            for state in [ServiceState.running, .stopped, .notInstalled] {
+            for state in [ServiceState.running, .stopped, .notInstalled, .unknown] {
                 cache[dotKey(state, dimmed)] = drawDot(state: state, dimmed: dimmed)
             }
         }
@@ -1603,6 +1627,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         case .running: base = "run"
         case .stopped: base = "stop"
         case .notInstalled: base = "none"
+        case .unknown: base = "unknown"
         }
         return dimmed ? base + "-d" : base
     }
@@ -1622,6 +1647,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 circle.fill()
             case .stopped:
                 NSColor.systemRed.withAlphaComponent(alpha).setFill()
+                circle.fill()
+            case .unknown:
+                NSColor.systemOrange.withAlphaComponent(alpha).setFill()
                 circle.fill()
             case .notInstalled:
                 NSColor.systemGray.withAlphaComponent(alpha).setStroke()

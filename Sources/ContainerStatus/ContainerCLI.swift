@@ -264,33 +264,37 @@ final class ContainerCLI: Sendable {
             return (.notInstalled, "CLI container nao encontrada")
         }
         let result = run(["system", "status"], timeout: Self.statusTimeout)
-        let state = ServiceState.from(exitCode: result.exitCode, timedOut: result.timedOut)
+        let state = ServiceState.from(result)
         var detail: String?
         if !result.spawned {
             detail = result.stderr.isEmpty ? "Falha ao executar \(binaryPath)" : Self.firstLine(result.stderr)
         } else if result.timedOut {
             detail = "status: tempo limite excedido"
-        } else if result.exitCode > 1 {
-            detail = Self.firstLine(result.stderr)
+        } else if state == .unknown {
+            let message = Self.firstLine(result.stderr.isEmpty ? result.stdout : result.stderr)
+            detail = message.isEmpty ? "status: resposta nao confirmada" : message
         }
         return (state, detail)
     }
 
-    /// Starts the service stack. Tries the plain `container system start`
-    /// first (correct behavior, installs the kernel when needed); the retry
-    /// skipping the interactive first-run kernel prompt roda somente apos
-    /// falha explicita - nunca apos timeout, porque um start morto pelo
-    /// watchdog deixa o bootstrap em andamento no launchd e um segundo start
-    /// colidiria com ele.
+    /// Repete somente quando a CLI identifica o prompt de kernel sem entrada.
+    /// Outras falhas nao autorizam um segundo bootstrap.
     func start() -> CLIRunResult {
         serviceLock.withLock { $0 = nil }
         let plain = run(["system", "start"], timeout: Self.mutationTimeout)
-        // Fallback so apos falha EXPLICITA (exit != 0): exit 0 com saida
-        // truncada ou pipe preso ja e start feito, e timeout deixa o
-        // bootstrap em andamento.
-        guard plain.spawned, !plain.timedOut, !plain.signaled, plain.exitCode != 0 else { return plain }
+        guard Self.needsKernelFallback(plain) else { return plain }
         let fallback = run(["system", "start", "--disable-kernel-install"], timeout: Self.mutationTimeout)
         return fallback.exitedCleanly ? fallback : plain
+    }
+
+    static func needsKernelFallback(_ result: CLIRunResult) -> Bool {
+        guard result.spawned, !result.timedOut, !result.signaled, !result.truncated,
+              result.exitCode != 0 else { return false }
+        let output = result.stdout + "\n" + result.stderr
+        let prompt = output.contains("No default kernel configured.")
+            || output.contains("Install the recommended default kernel")
+        return prompt && (output.contains("failed to read user input")
+            || output.contains("Please use the `container system kernel set --recommended`"))
     }
 
     /// Stops the whole service stack (apiserver, machine-apiserver,

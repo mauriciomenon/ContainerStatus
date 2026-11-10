@@ -47,6 +47,7 @@ struct AppMain {
             case .notInstalled: label = "nao instalado"
             case .running: label = "ligado"
             case .stopped: label = "desligado"
+            case .unknown: label = "desconhecido"
             }
             var line = "\(probe.label): \(label)\(path.map { " (\($0))" } ?? "")"
             if runtimeState != .notInstalled,
@@ -58,9 +59,10 @@ struct AppMain {
         let vmnet = VmnetProbe()
         if vmnet.fusionInstalled {
             let (vmnetState, vmCount) = vmnet.currentStatus()
-            let text = vmnetState == .running ? "ativo" : "parado"
+            let text = vmnetState == .running ? "processos observados"
+                : (vmnetState == .stopped ? "nenhum processo observado" : "desconhecido")
             let elevation = VmnetProbe.isRootOwned(vmnet.vmnetCliPath) ? "elevacao permitida" : "elevacao recusada"
-            print("VMware vmnet: \(text)\(vmCount > 0 ? " (\(vmCount) VM)" : "") [\(elevation)]")
+            print("VMware vmnet: \(text)\(vmCount.map { " (\($0) VM)" } ?? " (VMs desconhecidas)") [\(elevation)]")
         } else {
             print("VMware vmnet: Fusion nao instalado")
         }

@@ -6,6 +6,16 @@ enum ExternalRuntimeState: Equatable, Sendable {
     case notInstalled
     case running
     case stopped
+    case unknown
+
+    var displayLabel: String {
+        switch self {
+        case .notInstalled: return "Not Installed"
+        case .running: return "Running"
+        case .stopped: return "Not Running"
+        case .unknown: return "Unknown"
+        }
+    }
 }
 
 /// Receita declarativa de um runtime: binario, argumentos de status e a
@@ -17,8 +27,7 @@ struct RuntimeProbeConfig: Sendable {
     let label: String
     let binaryName: String
     let statusArguments: [String]
-    /// Timeout ou falha de spawn caem sempre em desligado: a linha e
-    /// informativa e conservadora, o poll seguinte corrige.
+    /// Falhas de observacao nao comprovam que o servico esta parado.
     let interpret: @Sendable (CLIRunResult) -> ExternalRuntimeState
     /// Comandos de controle (passo 2). nil = linha read-only permanente:
     /// docker tem o daemon dono do socket (o provider e quem manda) e Lima
@@ -133,8 +142,10 @@ extension RuntimeProbeConfig {
         label: "Lima", binaryName: "limactl",
         statusArguments: ["list", "--format", "{{.Name}} {{.Status}}"],
         interpret: { result in
-            result.succeeded && result.stdout.split(separator: "\n").contains { $0.hasSuffix(" Running") }
-                ? .running : .stopped
+            guard result.succeeded else { return .unknown }
+            let lines = result.stdout.split(separator: "\n")
+            if lines.contains(where: { $0.hasSuffix(" Running") }) { return .running }
+            return lines.allSatisfy { $0.hasSuffix(" Stopped") } ? .stopped : .unknown
         },
         info: RuntimeInfo(label: "Instances", arguments: ["list", "--format", "{{.Name}} {{.Status}}"]),
         statusTimeout: 10,  // ate 3s por instancia com hostagent lento
@@ -151,7 +162,10 @@ extension RuntimeProbeConfig {
     /// (pode passar de minuto no primeiro boot).
     static let colima = RuntimeProbeConfig(
         label: "Colima", binaryName: "colima", statusArguments: ["status"],
-        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        interpret: {
+            if $0.succeeded { return .running }
+            return ($0.stderr + $0.stdout).contains("colima is not running") ? .stopped : .unknown
+        },
         control: .selfBinary(binaryName: "colima",
                              startArguments: ["start"], startTimeout: 180,
                              stopArguments: ["stop"], stopTimeout: 120),
@@ -165,7 +179,7 @@ extension RuntimeProbeConfig {
     /// dono efetivo do daemon (ex.: orbstack).
     static let docker = RuntimeProbeConfig(
         label: "Docker", binaryName: "docker", statusArguments: ["info"],
-        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        interpret: { $0.succeeded ? .running : .unknown },
         info: RuntimeInfo(label: "Context", arguments: ["context", "show"]),
         countArguments: ["ps", "-q"],
         nature: "daemon docker (dono no contexto)"
@@ -193,7 +207,7 @@ extension RuntimeProbeConfig {
     static func podmanState(_ result: CLIRunResult) -> ExternalRuntimeState {
         guard result.succeeded,
               let machines = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [[String: Any]]
-        else { return .stopped }
+        else { return .unknown }
         // `machine start/stop` sem nome agem em podman-machine-default; o
         // campo Default da lista e a CONEXAO padrao, que pode ser outra. O
         // estado e so o dessa maquina (nome exato, com o "*" opcional da
@@ -202,7 +216,10 @@ extension RuntimeProbeConfig {
             let name = $0["Name"] as? String
             return name == podmanControlledMachine || name == podmanControlledMachine + "*"
         }
-        return target?["Running"] as? Bool == true ? .running : .stopped
+        guard let target else { return .stopped }
+        guard let running = target["Running"] as? Bool else { return .unknown }
+        if target["Starting"] as? Bool == true { return .unknown }
+        return running ? .running : .stopped
     }
 
     /// O toggle controla o servidor `lume serve` (servico brew), entao o
@@ -215,7 +232,15 @@ extension RuntimeProbeConfig {
         RuntimeProbeConfig(
             label: "Lume", binaryName: "lume",
             statusArguments: ["print", "gui/\(getuid())/homebrew.mxcl.lume"],
-            interpret: { $0.succeeded && $0.stdout.contains("state = running") ? .running : .stopped },
+            interpret: {
+                if $0.succeeded {
+                    let states = $0.stdout.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                    if states.contains("state = running") { return .running }
+                    return states.contains("state = not running") ? .stopped : .unknown
+                }
+                return $0.exitCode == 113 && ($0.stdout + $0.stderr).contains("Could not find service")
+                    ? .stopped : .unknown
+            },
             control: RuntimeControl(
                 startBinary: "brew", startArguments: ["services", "start", "lume"],
                 startTimeout: 60,
@@ -234,7 +259,7 @@ extension RuntimeProbeConfig {
     static let dockerDesktop = RuntimeProbeConfig(
         label: "Docker Desktop", binaryName: "/usr/bin/pgrep",
         statusArguments: ["-f", "^/Applications/Docker.app/Contents/MacOS/"],
-        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        interpret: { $0.exitCode == 0 ? .running : ($0.exitCode == 1 ? .stopped : .unknown) },
         control: .app(path: "/Applications/Docker.app", bundleID: "com.docker.docker", name: "Docker"),
         detectAppPath: "/Applications/Docker.app",
         nature: "app Docker Desktop + daemon proprio",
@@ -245,7 +270,7 @@ extension RuntimeProbeConfig {
     static let rancherDesktop = RuntimeProbeConfig(
         label: "Rancher Desktop", binaryName: "/usr/bin/pgrep",
         statusArguments: ["-f", "^/Applications/Rancher Desktop.app/Contents/MacOS/"],
-        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        interpret: { $0.exitCode == 0 ? .running : ($0.exitCode == 1 ? .stopped : .unknown) },
         control: .app(path: "/Applications/Rancher Desktop.app", bundleID: "io.rancherdesktop.app", name: "Rancher Desktop"),
         detectAppPath: "/Applications/Rancher Desktop.app",
         nature: "app Rancher Desktop + VM (backbone docker)",
@@ -257,7 +282,14 @@ extension RuntimeProbeConfig {
     /// --version e mostrava sempre desligado.
     static let finch = RuntimeProbeConfig(
         label: "Finch", binaryName: "finch", statusArguments: ["vm", "status"],
-        interpret: { $0.succeeded && ContainerCLI.firstLine($0.stdout) == "Running" ? .running : .stopped },
+        interpret: {
+            guard $0.succeeded else { return .unknown }
+            switch ContainerCLI.firstLine($0.stdout) {
+            case "Running": return .running
+            case "Stopped", "Nonexistent": return .stopped
+            default: return .unknown
+            }
+        },
         control: .selfBinary(binaryName: "finch",
                              startArguments: ["vm", "start"], startTimeout: 180,
                              stopArguments: ["vm", "stop"], stopTimeout: 120),
@@ -271,7 +303,10 @@ extension RuntimeProbeConfig {
     /// parava o motor e deixava o app, e Open num app ja aberto nao religava.
     static let orbstack = RuntimeProbeConfig(
         label: "OrbStack", binaryName: "orbctl", statusArguments: ["status"],
-        interpret: { $0.exitCode == 0 && $0.spawned ? .running : .stopped },
+        interpret: {
+            if $0.succeeded && ContainerCLI.firstLine($0.stdout) == "Running" { return .running }
+            return $0.exitCode == 1 && ContainerCLI.firstLine($0.stdout) == "Stopped" ? .stopped : .unknown
+        },
         control: .selfBinary(binaryName: "orbctl",
                              startArguments: ["start"], startTimeout: 120,
                              stopArguments: ["stop"], stopTimeout: 120),
@@ -285,6 +320,7 @@ enum VmnetState: Equatable, Sendable {
     case notInstalled
     case running
     case stopped
+    case unknown
 }
 
 /// Sonda e acao da rede virtual do VMware Fusion. Os daemons vmnet sao
@@ -314,7 +350,7 @@ final class VmnetProbe: Sendable {
     }
 
     /// Daemon vmnet de pe (natd/dhcpd/bridge) e VMs rodando (vmware-vmx).
-    func currentStatus() -> (state: VmnetState, vmCount: Int) {
+    func currentStatus() -> (state: VmnetState, vmCount: Int?) {
         guard fusionInstalled else { return (.notInstalled, 0) }
         // -x (nome exato): -f casaria qualquer processo com "vmnet" nos
         // argumentos (grep, tail de log) e mentiria "Ativo" com a rede caida.
@@ -324,17 +360,18 @@ final class VmnetProbe: Sendable {
         let vms = ContainerCLI.runBinary(pgrepPath,
                                          arguments: ["-x", "vmware-vmx"],
                                          timeout: Self.statusTimeout)
-        let vmCount = vms.succeeded
-            ? vms.stdout.split(separator: "\n", omittingEmptySubsequences: true).count
-            : 0
-        // pgrep: exit 0 com pids = tem daemon; 1 = nenhum; falha de spawn =
-        // conservador, mostra parado e o poll seguinte corrige.
-        let state: VmnetState = daemons.spawned && daemons.exitCode == 0 ? .running : .stopped
+        let validVMs = vms.spawned && !vms.timedOut && !vms.truncated && !vms.signaled
+        let vmCount: Int? = validVMs && (vms.exitCode == 0 || vms.exitCode == 1)
+            ? vms.stdout.split(separator: "\n", omittingEmptySubsequences: true).count : nil
+        // Estes processos sao evidencia observada, nao teste de conectividade.
+        let validDaemons = daemons.spawned && !daemons.timedOut && !daemons.truncated && !daemons.signaled
+        let state: VmnetState = validDaemons
+            ? (daemons.exitCode == 0 ? .running : (daemons.exitCode == 1 ? .stopped : .unknown)) : .unknown
         return (state, vmCount)
     }
 
     /// Comando de subida com elevacao: o macOS pede a senha no dialogo de
-    /// administrador. Para o repair: para (best-effort) e sobe de novo.
+    /// administrador. Iniciar nunca interrompe uma rede existente.
     /// Duas camadas de escape: o caminho vai entre aspas simples para o
     /// shell, e o comando inteiro vira literal AppleScript. Aspas duplas
     /// cruas dentro do literal quebravam a compilacao do script.
@@ -361,7 +398,7 @@ final class VmnetProbe: Sendable {
         // pelo usuario) e o do shell script herda o ambiente do app; com o
         // HOME do usuario, um config plantado viraria escrita de arquivo como root.
         let rootEnv = "/usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin"
-        let shell = "\(verificationShell()); \(rootEnv) ./vmnet-cli --stop >/dev/null 2>&1; \(rootEnv) ./vmnet-cli --start"
+        let shell = "\(verificationShell()); exec \(rootEnv) ./vmnet-cli --start"
         let literal = shell.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "do shell script \"\(literal)\" with administrator privileges"
@@ -464,8 +501,8 @@ final class RuntimeProbe: Sendable {
                                             timeout: config.statusTimeout)
         // Resultado volta tambem na falha: o tooltip reaproveita e nao repete
         // um CLI que acabou de estourar o prazo (Lima travado custava 2x 10s).
-        guard result.spawned, !result.timedOut else {
-            return (.stopped, path, result)
+        guard result.spawned, !result.timedOut, !result.truncated, !result.signaled else {
+            return (.unknown, path, result)
         }
         return (config.interpret(result), path, result)
     }
@@ -566,6 +603,10 @@ final class RuntimeProbe: Sendable {
     func tooltipInfo(state: ExternalRuntimeState, statusResult: CLIRunResult? = nil) -> String? {
         guard state != .notInstalled else { return nil }
         var parts: [String] = []
+        if state == .unknown, let result = statusResult {
+            // Nunca incluir stdout bruto: launchctl pode listar ambiente privado.
+            parts.append(result.timedOut ? "Consulta excedeu o prazo" : "Estado nao confirmado (exit \(result.exitCode))")
+        }
         if !config.nature.isEmpty {
             parts.append(config.nature)
         }
@@ -573,10 +614,11 @@ final class RuntimeProbe: Sendable {
             parts.append(runtimeInfo)
         }
         if let autoStart = autoStartLabel() {
-            parts.append("Auto-start: On (\(autoStart))")
+            parts.append("LaunchAgent encontrado: \(autoStart)")
         }
         if state == .running, let runningCount = runningCount() {
-            parts.append("Containers: \(runningCount)")
+            parts.append(config.label == "Podman"
+                ? "Containers na conexao ativa: \(runningCount)" : "Containers: \(runningCount)")
         }
         return parts.isEmpty ? nil : parts.joined(separator: "; ")
     }

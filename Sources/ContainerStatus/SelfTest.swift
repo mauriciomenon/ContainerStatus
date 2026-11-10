@@ -19,13 +19,23 @@ enum SelfTest {
             }
         }
 
-        // State mapping.
-        expect(ServiceState.from(exitCode: 0, timedOut: false) == .running, "exit 0 = running")
-        expect(ServiceState.from(exitCode: 1, timedOut: false) == .stopped, "exit 1 = stopped")
-        expect(ServiceState.from(exitCode: 2, timedOut: false) == .stopped, "exit 2 = stopped")
-        expect(ServiceState.from(exitCode: 127, timedOut: false) == .stopped, "exit 127 = stopped")
-        expect(ServiceState.from(exitCode: 0, timedOut: true) == .notInstalled, "timeout = not installed")
-        expect(ServiceState.from(exitCode: 1, timedOut: true) == .notInstalled, "timeout beats exit code")
+        expect(ServiceState.from(CLIRunResult(exitCode: 0, spawned: true)) == .running,
+               "status Apple com sucesso = running")
+        expect(ServiceState.from(CLIRunResult(exitCode: 1, spawned: true)) == .unknown,
+               "exit 1 sem evidencia = unknown")
+        expect(ServiceState.from(CLIRunResult(exitCode: 0, timedOut: true, spawned: true)) == .unknown,
+               "timeout nao confirma sucesso")
+
+        expect(ServiceState.from(CLIRunResult(exitCode: 1, spawned: true, stderr: "Operation not permitted")) == .unknown,
+               "erro de permissao nao e servico parado")
+        expect(ServiceState.from(CLIRunResult(exitCode: 1, spawned: true, stdout: "apiserver is not running and not registered with launchd")) == .stopped,
+               "Apple sem apiserver confirmado = parado")
+        expect(ServiceState.from(CLIRunResult(exitCode: 0, spawned: true, truncated: true)) == .unknown,
+               "status Apple truncado e desconhecido")
+        expect(ContainerCLI.needsKernelFallback(CLIRunResult(exitCode: 1, spawned: true,
+            stderr: "No default kernel configured. failed to read user input")), "falta de kernel permite fallback")
+        expect(!ContainerCLI.needsKernelFallback(CLIRunResult(exitCode: 1, spawned: true,
+            stderr: "Operation not permitted")), "permissao nao dispara fallback de kernel")
 
         // Text helpers.
         expect(ContainerCLI.firstLine("a\nb\nc") == "a", "firstLine multiline")
@@ -383,7 +393,7 @@ enum SelfTest {
         try writeStartCLI(exitCode: 1)
         _ = starter.start()
         let startsAfterFailure = try probeCount(for: startCLI, suffix: ".starts")
-        expect(startsAfterFailure == 2, "start com exit 1 dispara o fallback")
+        expect(startsAfterFailure == 1, "start com erro generico nao dispara o fallback")
         // Morte por sinal nao e falha explicita: nada de segundo start.
         let signalScript = """
         #!/bin/sh
@@ -525,13 +535,23 @@ enum SelfTest {
         expect(stopped.currentStatus().state == .stopped,
                "vmnet sem daemon = parado")
 
+        try "#!/bin/sh\necho access-denied >&2\nexit 3".write(toFile: pgrepIdle.path, atomically: false, encoding: .utf8)
+        let failedObservation = stopped.currentStatus()
+        expect(failedObservation.state == .unknown && failedObservation.vmCount == nil,
+               "erro de pgrep nao vira rede parada nem zero VMs")
+        let unavailable = VmnetProbe(fusionAppPath: fusion.path, pgrepPath: "/no/such/pgrep").currentStatus()
+        expect(unavailable.state == .unknown && unavailable.vmCount == nil,
+               "falha de spawn da sonda vmnet e desconhecida")
+
         let script = running.startScript()
+        expect(!script.contains("--stop") && !script.contains("/dev/null"),
+               "subida vmnet nunca para servicos nem descarta erro")
         expect(script.contains("vmnet-cli") && script.contains("with administrator privileges")
                && script.contains("--start")
                && script.contains("/usr/bin/codesign --verify") && script.contains(VmnetProbe.vmwareTeamID),
                "script de subida confere a assinatura VMware como root antes de subir")
-        expect(script.components(separatedBy: "/usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin ./vmnet-cli").count == 3,
-               "vmnet-cli roda como root com ambiente zerado (sem HOME/PATH do usuario) no stop e no start")
+        expect(script.components(separatedBy: "/usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin ./vmnet-cli").count == 2,
+               "vmnet-cli roda somente start como root com ambiente zerado")
         // Verificacao do shell elevado, rodada sem root: stub do usuario cai;
         // o Fusion real (root:wheel, assinado pela VMware) passa.
         let stubCheck = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", running.verificationShell() + "; echo OK"],
@@ -598,7 +618,7 @@ enum SelfTest {
             .currentStatus().state == .running, "docker com daemon = ligado")
         _ = try bare("docker", dockerDirectory, exitCode: 1)
         expect(RuntimeProbe(config: .docker, directories: [dockerDirectory.path])
-            .currentStatus().state == .stopped, "docker sem daemon = desligado")
+            .currentStatus().state == .unknown, "docker com erro generico = desconhecido")
 
         // Informacao de planta (passo 3 parcial): contexto do docker via
         // sonda read-only; falha de comando = nil.
@@ -721,6 +741,23 @@ enum SelfTest {
         expect(RuntimeProbeConfig.dockerFamily.allSatisfy { probed.contains($0.label) },
                "familia docker inteira entra nas sondas padrao")
 
+        let missingStatus = RuntimeProbe(config: RuntimeProbeConfig(
+            label: "Docker", binaryName: "docker", statusArguments: [],
+            interpret: { _ in .running }, statusBinary: "/no/such/status"), directories: [dockerDirectory.path])
+        expect(missingStatus.currentStatus().state == .unknown,
+               "falha de spawn nao entrega estado presumido pelo interpretador")
+        let invalidResult = CLIRunResult(exitCode: 1, spawned: true, stderr: "Operation not permitted")
+        for config in RuntimeProbeConfig.standard {
+            expect(config.interpret(invalidResult) == (config.appBased ? .stopped : .unknown),
+                   "\(config.label): erro generico nao prova servico parado")
+        }
+        expect(RuntimeProbeConfig.podman.interpret(CLIRunResult(exitCode: 0, spawned: true, stdout: "broken json")) == .unknown,
+               "Podman JSON invalido e desconhecido")
+        expect(RuntimeProbeConfig.lima.interpret(CLIRunResult(exitCode: 0, spawned: true, stdout: "dev Broken")) == .unknown,
+               "Lima Broken nao e parado")
+        expect(lumeProbe.tooltipInfo(state: .stopped)?.contains("Auto-start: On") == false,
+               "plist existente nao afirma auto-start habilitado")
+
         // Lima: "nome estado" por linha; ligado = alguma instancia Running.
         let limaDirectory = temporary.appendingPathComponent("lima", isDirectory: true)
         try FileManager.default.createDirectory(at: limaDirectory, withIntermediateDirectories: false)
@@ -751,12 +788,12 @@ enum SelfTest {
                                               ofItemAtPath: limaDirectory.appendingPathComponent("limactl").path)
         let slowLima = RuntimeProbe(config: RuntimeProbeConfig(
             label: "Lima", binaryName: "limactl", statusArguments: RuntimeProbeConfig.lima.statusArguments,
-            interpret: RuntimeProbeConfig.lima.interpret, info: RuntimeProbeConfig.lima.info, statusTimeout: 0.3),
+            interpret: RuntimeProbeConfig.lima.interpret, info: RuntimeProbeConfig.lima.info, statusTimeout: 1),
             directories: [limaDirectory.path])
         let slowStatus = slowLima.statusWithResult()
         _ = slowLima.tooltipInfo(state: slowStatus.state, statusResult: slowStatus.result)
         let limaCalls = (try? String(contentsOfFile: calls, encoding: .utf8))?.split(separator: "\n").count ?? 0
-        expect(slowStatus.state == .stopped && limaCalls == 1,
+        expect(slowStatus.state == .unknown && limaCalls == 1,
                "lima estourado: uma unica consulta, o tooltip nao repete (\(limaCalls) chamadas)")
 
         // Finch: vm status imprime Running / Stopped / Nonexistent.
@@ -781,7 +818,7 @@ enum SelfTest {
         _ = try stub("orbctl", orbstackDirectory, stdout: "Running", exitCode: 0)
         expect(RuntimeProbe(config: .orbstack, directories: [orbstackDirectory.path])
             .currentStatus().state == .running, "orbstack running = ligado")
-        _ = try bare("orbctl", orbstackDirectory, exitCode: 1)
+        _ = try stub("orbctl", orbstackDirectory, stdout: "Stopped", exitCode: 1)
         expect(RuntimeProbe(config: .orbstack, directories: [orbstackDirectory.path])
             .currentStatus().state == .stopped, "orbstack parado = desligado")
     }
@@ -792,6 +829,7 @@ enum SelfTest {
         #!/bin/sh
         if [ "$1" = status ]; then
           \(delay > 0 ? "/bin/sleep \(delay)" : ":")
+          \(exitCode == 1 ? "echo colima is not running >&2" : ":")
           exit \(exitCode)
         fi
         exit 0
@@ -818,7 +856,7 @@ enum SelfTest {
             .currentStatus().state == .stopped, "colima simulado parado = desligado")
         try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0, delay: 5)
         expect(RuntimeProbe(config: .colima, directories: [runningDirectory.path])
-            .currentStatus().state == .stopped, "colima travado cai no watchdog e mostra desligado")
+            .currentStatus().state == .unknown, "colima travado cai no watchdog e mostra desconhecido")
         try writeColima(at: runningDirectory.appendingPathComponent("colima"), exitCode: 0)
         expect(RuntimeProbe(config: .colima, directories: [stoppedDirectory.path]).resolvedPath() != nil,
                "caminho do colima acompanha candidato")
@@ -832,7 +870,7 @@ enum SelfTest {
         case "$1" in
           start) touch "$0.state"; exit 0 ;;
           stop) rm -f "$0.state"; exit 0 ;;
-          status) [ -f "$0.state" ] && exit 0 || exit 1 ;;
+          status) [ -f "$0.state" ] && exit 0; echo colima is not running >&2; exit 1 ;;
         esac
         """
         let controlPath = stoppedDirectory.appendingPathComponent("colima").path
