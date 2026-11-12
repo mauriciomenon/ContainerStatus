@@ -38,7 +38,7 @@ Apple Container
   Lume: ...  >   Status (auto-start) + Actions: Start/Stop Lume
                  (servico brew lume serve)
   Lima: ...  >   Status somente leitura: uma instancia por linha
-  VMware vmnet: No processes observed - 1 VM + Enable Daemon (senha de admin; somente start)
+  VMware vmnet: Processes observed - 1 VM > Status (daemons/PIDs/VMs), Actions
 -----------------------------
 [linha de erro, quando existe]   falha de operacao ou diagnostico do poll
 Open at Login                    SMAppService, sem permissoes extras
@@ -92,6 +92,9 @@ timestamp da configuracao e do lock antes de tentar iniciar a rede novamente,
 na mesma elevacao administrativa. Lock ativo, alterado, desconhecido ou com
 permissoes inseguras e recusado com motivo visivel. Nao inicie VMs durante a
 recuperacao. A acao nunca para servicos nem reconfigura a rede.
+O submenu VMware lista os daemons observados e seus PIDs, alem da quantidade de
+VMs. Ele reutiliza a consulta de processos existente, sem elevacao ou chamada
+periodica a `vmnet-cli --status`. Falhas de leitura aparecem como indisponiveis.
 
 
 **De onde vem o direito de startar/parar o daemon:** o servico Apple

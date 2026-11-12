@@ -646,12 +646,22 @@ enum SelfTest {
         let pgrepDirectory = temporary.appendingPathComponent("pgrep-running", isDirectory: true)
         try FileManager.default.createDirectory(at: pgrepDirectory, withIntermediateDirectories: false)
         let pgrep = pgrepDirectory.appendingPathComponent("pgrep")
-        try "#!/bin/sh\necho 101\necho 102\nexit 0".write(toFile: pgrep.path, atomically: false, encoding: .utf8)
+        try "#!/bin/sh\nif [ \"$1\" = -l ]; then\n  echo 101 vmnet-dhcpd\n  echo 102 vmnet-natd\nelse\n  echo 101\n  echo 102\nfi\nexit 0".write(toFile: pgrep.path, atomically: false, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pgrep.path)
         let running = VmnetProbe(fusionAppPath: fusion.path, pgrepPath: pgrep.path)
-        let (state, vmCount) = running.currentStatus()
-        expect(state == .running && vmCount == 2,
+        let status = running.currentStatus()
+        expect(status.state == .running && status.vmCount == 2,
                "vmnet com daemons = ativo e conta VMs")
+        expect(status.services == ["vmnet-dhcpd (PID 101)", "vmnet-natd (PID 102)"],
+               "vmnet lista somente nomes e PIDs observados")
+        for malformed in ["101 unexpected-name", "-1 vmnet-natd", "0 vmnet-dhcpd", "+101 vmnet-natd",
+                          "101 vmnet-natd extra", "101 vmnet-natd\ninvalid", ""] {
+            try ("#!/bin/sh\nprintf '%s\\n' '" + malformed + "'\nexit 0")
+                .write(toFile: pgrep.path, atomically: false, encoding: .utf8)
+            let invalidDetails = running.currentStatus()
+            expect(invalidDetails.state == .running && invalidDetails.services == nil,
+                   "saida de processo malformada nao vira detalhe VMware")
+        }
 
         let pgrepIdleDirectory = temporary.appendingPathComponent("pgrep-idle", isDirectory: true)
         try FileManager.default.createDirectory(at: pgrepIdleDirectory, withIntermediateDirectories: false)
@@ -659,15 +669,15 @@ enum SelfTest {
         try "#!/bin/sh\nexit 1".write(toFile: pgrepIdle.path, atomically: false, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: pgrepIdle.path)
         let stopped = VmnetProbe(fusionAppPath: fusion.path, pgrepPath: pgrepIdle.path)
-        expect(stopped.currentStatus().state == .stopped,
-               "vmnet sem daemon = parado")
+        expect(stopped.currentStatus().state == .stopped && stopped.currentStatus().services == [],
+               "vmnet sem daemon = parado com lista vazia")
 
         try "#!/bin/sh\necho access-denied >&2\nexit 3".write(toFile: pgrepIdle.path, atomically: false, encoding: .utf8)
         let failedObservation = stopped.currentStatus()
-        expect(failedObservation.state == .unknown && failedObservation.vmCount == nil,
+        expect(failedObservation.state == .unknown && failedObservation.vmCount == nil && failedObservation.services == nil,
                "erro de pgrep nao vira rede parada nem zero VMs")
         let unavailable = VmnetProbe(fusionAppPath: fusion.path, pgrepPath: "/no/such/pgrep").currentStatus()
-        expect(unavailable.state == .unknown && unavailable.vmCount == nil,
+        expect(unavailable.state == .unknown && unavailable.vmCount == nil && unavailable.services == nil,
                "falha de spawn da sonda vmnet e desconhecida")
 
         let script = running.startScript()

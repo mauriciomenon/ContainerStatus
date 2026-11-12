@@ -350,12 +350,12 @@ final class VmnetProbe: Sendable {
     }
 
     /// Daemon vmnet de pe (natd/dhcpd/bridge) e VMs rodando (vmware-vmx).
-    func currentStatus() -> (state: VmnetState, vmCount: Int?) {
-        guard fusionInstalled else { return (.notInstalled, 0) }
+    func currentStatus() -> (state: VmnetState, vmCount: Int?, services: [String]?) {
+        guard fusionInstalled else { return (.notInstalled, 0, nil) }
         // -x (nome exato): -f casaria qualquer processo com "vmnet" nos
         // argumentos (grep, tail de log) e mentiria "Ativo" com a rede caida.
         let daemons = ContainerCLI.runBinary(pgrepPath,
-                                             arguments: ["-U", "0", "-x", "vmnet-(natd|dhcpd|bridge)"],  // so do root: processo homonimo do usuario nao esconde o reparo
+                                             arguments: ["-l", "-U", "0", "-x", "vmnet-(natd|dhcpd|bridge)"],  // so do root: processo homonimo do usuario nao esconde o reparo
                                              timeout: Self.statusTimeout)
         let vms = ContainerCLI.runBinary(pgrepPath,
                                          arguments: ["-x", "vmware-vmx"],
@@ -367,7 +367,27 @@ final class VmnetProbe: Sendable {
         let validDaemons = daemons.spawned && !daemons.timedOut && !daemons.truncated && !daemons.signaled
         let state: VmnetState = validDaemons
             ? (daemons.exitCode == 0 ? .running : (daemons.exitCode == 1 ? .stopped : .unknown)) : .unknown
-        return (state, vmCount)
+        var services: [String]?
+        if validDaemons && daemons.exitCode == 1 {
+            services = []
+        } else if validDaemons && daemons.exitCode == 0 {
+            let lines = daemons.stdout.split(separator: "\n")
+            var observed: [String] = []
+            for line in lines {
+                let fields = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                guard fields.count == 2,
+                      fields[0].utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                      let pid = Int(fields[0]), pid > 0,
+                      ["vmnet-dhcpd", "vmnet-natd", "vmnet-bridge"].contains(String(fields[1])) else {
+                    observed = []
+                    break
+                }
+                observed.append("\(fields[1]) (PID \(pid))")
+            }
+            // Exit 0 continua evidenciando processos; detalhes invalidos nao sao exibidos.
+            if !observed.isEmpty { services = observed }
+        }
+        return (state, vmCount, services)
     }
 
     /// Comando de subida com elevacao: o macOS pede a senha no dialogo de

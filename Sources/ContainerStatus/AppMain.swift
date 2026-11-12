@@ -58,11 +58,17 @@ struct AppMain {
         }
         let vmnet = VmnetProbe()
         if vmnet.fusionInstalled {
-            let (vmnetState, vmCount) = vmnet.currentStatus()
+            let status = vmnet.currentStatus()
+            let (vmnetState, vmCount) = (status.state, status.vmCount)
             let text = vmnetState == .running ? "processos observados"
                 : (vmnetState == .stopped ? "nenhum processo observado" : "desconhecido")
             let elevation = VmnetProbe.isRootOwned(vmnet.vmnetCliPath) ? "elevacao permitida" : "elevacao recusada"
             print("VMware vmnet: \(text)\(vmCount.map { " (\($0) VM)" } ?? " (VMs desconhecidas)") [\(elevation)]")
+            if let services = status.services {
+                for service in services { print("  \(service)") }
+            } else {
+                print("  Consulta dos daemons indisponivel")
+            }
         } else {
             print("VMware vmnet: Fusion nao instalado")
         }

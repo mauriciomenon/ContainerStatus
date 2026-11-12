@@ -43,6 +43,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     /// Rede virtual do VMware (vmnet): estado, VMs e subida em voo.
     private var vmnetState: VmnetState = .notInstalled
     private var vmCount: Int? = nil
+    private var vmnetServices: [String]?
     private var vmnetBusy = false
     private var vmnetRecovery: VmnetLockRecovery.Snapshot?
     private var controlBusy: Bool {
@@ -565,7 +566,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
             vmnetRowItem.title = text
             vmnetRowItem.indentationLevel = 1
-            vmnetRowItem.isEnabled = false
+            vmnetRowItem.isEnabled = true
             if vmnetBusy {
                 vmnetActionItem.title = "Working..."
                 vmnetActionItem.isEnabled = false
@@ -576,9 +577,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
             vmnetActionItem.toolTip = vmnetRecovery == nil ? nil
                 : "Preserva backup do lock orfao e tenta iniciar a rede. Requer nenhuma VM ativa."
-            place(vmnetActionItem, present: vmnetState != .running || vmnetRecovery != nil)
-        } else {
-            place(vmnetActionItem, present: false)
+            var lines = [vmCount.map { "VMs em execucao: \($0)" } ?? "Contagem de VMs desconhecida"]
+            if let vmnetServices {
+                lines += vmnetServices.isEmpty ? ["Nenhum daemon observado"] : vmnetServices
+            } else {
+                lines.append("Consulta dos daemons indisponivel")
+            }
+            vmnetRowItem.toolTip = "Consulta de processos locais; a conectividade e verificada na VM."
+            runtimeInfo["VMware vmnet"] = lines.joined(separator: "; ")
+            fillSubmenu(vmnetRowItem, label: "VMware vmnet",
+                        actions: vmnetState != .running || vmnetRecovery != nil ? [vmnetActionItem] : [])
         }
 
         place(tailSep, present: true)
@@ -783,13 +791,14 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                         containers: [ContainerCLI.ContainerSummary]? = nil,
                         runtimes: [String: ExternalRuntimeState]? = nil,
                         info: [String: String]? = nil,
-                        vmnet: (state: VmnetState, vmCount: Int?)? = nil,
+                        vmnet: (state: VmnetState, vmCount: Int?, services: [String]?)? = nil,
                         sequence: Int, epoch: Int = Int.max) {
         guard epoch >= mutationEpoch else { return }
         guard sequence > lastAppliedSequence else { return }
         if let vmnet, vmnetBusy != true {
             self.vmnetState = vmnet.state
             self.vmCount = vmnet.vmCount
+            self.vmnetServices = vmnet.services
         }
         containerItems = containers ?? []
         containerCount = containers?.count
@@ -962,17 +971,19 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
             await MainActor.run { [weak self] in
                 self?.finishVmnet(result: result, state: status.state, vmCount: status.vmCount,
-                                  recovery: diagnosis)
+                                  services: status.services, recovery: diagnosis)
             }
         }
     }
 
     private func finishVmnet(result: CLIRunResult, state: VmnetState, vmCount: Int?,
+                             services: [String]? = nil,
                              recovery: VmnetLockRecovery.Diagnosis = .absent) {
         mutationEpoch += 1
         vmnetBusy = false
         vmnetState = state
         self.vmCount = vmCount
+        self.vmnetServices = services
         switch recovery {
         case .eligible(let snapshot): vmnetRecovery = snapshot
         case .absent, .unavailable: vmnetRecovery = nil
@@ -1456,6 +1467,22 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         expect(toggleController.vmnetRecovery == nil
                && toggleController.detail?.contains("recuperacao recusada: Processo ativo") == true,
                "diagnostico duvidoso nao habilita recuperacao nem esconde a recusa")
+        toggleController.finishVmnet(result: CLIRunResult(exitCode: 0, spawned: true),
+                                    state: .running, vmCount: 1,
+                                    services: ["vmnet-dhcpd (PID 101)", "vmnet-natd (PID 102)"])
+        expect(toggleController.vmnetRowItem.submenu?.items.contains {
+            $0.title == "vmnet-dhcpd (PID 101)"
+        } == true && toggleController.vmnetRowItem.submenu?.items.contains {
+            $0.title == "vmnet-natd (PID 102)"
+        } == true && toggleController.vmnetActionItem.menu == nil,
+               "submenu VMware mostra daemons e PIDs sem acao de subir quando ativos")
+        toggleController.finishVmnet(result: CLIRunResult(exitCode: 1, spawned: true),
+                                    state: .unknown, vmCount: nil, services: nil)
+        expect(toggleController.vmnetRowItem.submenu?.items.contains {
+            $0.title == "Consulta dos daemons indisponivel"
+        } == true && toggleController.vmnetRowItem.submenu?.items.contains {
+            $0.title == "vmnet-dhcpd (PID 101)"
+        } == false, "falha de consulta elimina lista de daemons desatualizada")
         toggleController.finishRuntime(label: "Colima",
             result: CLIRunResult(exitCode: 0, spawned: true, stderr: "Starting..."), state: .stopped, expected: .running)
         expect(toggleController.detailIsLocal && toggleController.detail == "Colima: Operacao nao confirmada",
