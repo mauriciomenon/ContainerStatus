@@ -606,6 +606,51 @@ enum SelfTest {
         try valid.write(to: member)
         try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: member.path)
 
+        guard case let .eligible(verified) = inspect() else {
+            expect(false, "fixture de lock valido disponivel para verificacao elevada")
+            return
+        }
+        let safeMember = VmnetLockRecovery.memberVerificationShell(path: member.path,
+            inode: verified.memberNumber, sha256: verified.sha256, ownerUID: getuid())
+        func verifyMember() -> CLIRunResult {
+            ContainerCLI.runBinary("/bin/sh", arguments: ["-c", safeMember], timeout: 5)
+        }
+        expect(verifyMember().succeeded, "verificacao elevada aceita arquivo e hash originais")
+        let savedVerified = base.appendingPathComponent("verified-preservado")
+        try manager.moveItem(at: member, to: savedVerified)
+        try valid.write(to: member)
+        expect(!verifyMember().succeeded, "verificacao elevada recusa arquivo substituido")
+        try manager.removeItem(at: member)
+        try manager.createSymbolicLink(atPath: member.path, withDestinationPath: savedVerified.path)
+        expect(!verifyMember().succeeded, "verificacao elevada nao segue symlink")
+        try manager.removeItem(at: member)
+        guard mkfifo(member.path, 0o644) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let elevatedFifoStarted = Date()
+        let fifoResult = verifyMember()
+        expect(!fifoResult.succeeded && !fifoResult.timedOut
+               && Date().timeIntervalSince(elevatedFifoStarted) < 2,
+               "verificacao elevada recusa FIFO sem bloquear")
+        try manager.removeItem(at: member)
+        try manager.moveItem(at: savedVerified, to: member)
+
+        let fakeLsof = base.appendingPathComponent("lsof-fixture")
+        func runLsofGuard(_ script: String) throws -> CLIRunResult {
+            try script.write(to: fakeLsof, atomically: false, encoding: .utf8)
+            try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeLsof.path)
+            let guardShell = "base=fixture; member=fixture; fail() { echo \"$1\" >&2; exit 1; }; "
+                + VmnetLockRecovery.lsofGuardShell(command: fakeLsof.path)
+            return ContainerCLI.runBinary("/bin/sh", arguments: ["-c", guardShell], timeout: 5)
+        }
+        expect(try runLsofGuard("#!/bin/sh\nexit 1\n").succeeded,
+               "lsof sem saida e exit 1 confirma ausencia de detentores")
+        let lsofError = try runLsofGuard("#!/bin/sh\necho 'acesso negado' >&2\nexit 1\n")
+        expect(!lsofError.succeeded && lsofError.stderr.contains("acesso negado"),
+               "erro de lsof com exit 1 recusa e preserva a causa")
+        expect(!(try runLsofGuard("#!/bin/sh\necho 123\nexit 0\n")).succeeded,
+               "lsof com processo detectado impede recuperacao")
+
         let shell = VmnetLockRecovery.recoveryShell(snapshot: snapshot)
         let removesFiles = shell.range(of: #"(?m)(^|[;\n])[ \t]*(?:/bin/)?rm(?:[ \t]|$)"#,
                                        options: .regularExpression) != nil

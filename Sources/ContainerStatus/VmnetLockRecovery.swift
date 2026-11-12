@@ -137,9 +137,53 @@ enum VmnetLockRecovery {
         }
     }
 
+    private static func quote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Abre sem seguir symlink nem esperar FIFO e verifica o mesmo descritor.
+    static func memberVerificationShell(path: String, inode: UInt64, sha256: String,
+                                        ownerUID: uid_t = 0) -> String {
+        let program = #"""
+        BEGIN { @INC = grep { m{^/System/Library/Perl/} } @INC; }
+        use Fcntl qw(:DEFAULT :mode);
+        use Digest::SHA ();
+        my ($path, $inode, $expected, $owner) = @ARGV;
+        sysopen(my $file, $path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW) or die "abertura segura do lock falhou\n";
+        my @before = stat($file);
+        @before && S_ISREG($before[2]) && $before[1] == $inode && $before[4] == $owner &&
+            !($before[2] & 0022) && $before[7] == 512 or die "metadados do lock mudaram\n";
+        my $bytes = "";
+        my $length = sysread($file, $bytes, 513);
+        defined($length) && $length == 512 or die "leitura incompleta do lock\n";
+        my @after = stat($file);
+        my @current = lstat($path);
+        @after && @current && S_ISREG($current[2]) && S_ISREG($after[2]) &&
+            $after[0] == $before[0] && $after[1] == $before[1] &&
+            $after[4] == $owner && !($after[2] & 0022) && $after[7] == 512 &&
+            $current[0] == $before[0] && $current[1] == $before[1] &&
+            $current[4] == $owner && !($current[2] & 0022) && $current[7] == 512 &&
+            Digest::SHA::sha256_hex($bytes) eq $expected or die "lock mudou durante a leitura\n";
+        close($file) or die "falha ao fechar lock\n";
+        """#
+        return "/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C /usr/bin/perl -e "
+            + quote(program) + " " + quote(path) + " \(inode) " + quote(sha256) + " \(ownerUID)"
+    }
+
+    /// Exit 1 so significa ausencia de detentores quando nao ha saida ou erro.
+    static func lsofGuardShell(command: String = "/usr/sbin/lsof") -> String {
+        """
+        if holders=$(\(quote(command)) -t "$base/networking" "$member" 2>&1); then
+          fail 'configuracao ou lock em uso'
+        else
+          code=$?
+          [ "$code" = 1 ] && [ -z "$holders" ] || fail "nao foi possivel excluir detentor ativo: $holders"
+        fi
+        """
+    }
+
     /// Revalida tudo como root. Nao apaga arquivos nem executa start/stop.
     static func recoveryShell(snapshot: Snapshot) -> String {
-        func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         return """
         set -eu
         export LC_ALL=C PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -162,8 +206,8 @@ enum VmnetLockRecovery {
           [ "$(/usr/bin/find "$base" "$base/networking" "$member" -maxdepth 0 -user 0 ! -perm -020 ! -perm -002 | /usr/bin/wc -l | /usr/bin/tr -d ' ')" = 3 ] || fail 'configuracao gravavel ou dono invalido'
           [ "$(/bin/ls -A "$lock")" = \(quote(snapshot.memberName)) ] || fail 'membros do lock mudaram'
           [ "$(/usr/bin/stat -f %i "$lock")" = \(snapshot.directoryNumber) ] && [ "$(/usr/bin/stat -f %i "$member")" = \(snapshot.memberNumber) ] && [ "$(/usr/bin/stat -f %i "$base/networking")" = \(snapshot.configurationNumber) ] || fail 'arquivo do lock ou configuracao foi trocado'
-          actual=$(/usr/bin/shasum -a 256 "$member")
-          [ "${actual%% *}" = \(quote(snapshot.sha256)) ] || fail 'conteudo do lock mudou'
+          \(memberVerificationShell(path: snapshot.configurationDirectory + "/networking.lck/" + snapshot.memberName,
+                                    inode: snapshot.memberNumber, sha256: snapshot.sha256)) || fail 'membro do lock mudou ou nao pode ser verificado'
           if reason=$(/bin/kill -0 \(snapshot.pid) 2>&1); then fail 'processo do lock esta ativo'; else
             case "$reason" in *'No such process'*) ;; *) fail 'estado do processo do lock desconhecido' ;; esac
           fi
@@ -179,9 +223,7 @@ enum VmnetLockRecovery {
         check_processes
         device=$(/bin/df -P "$base" | /usr/bin/awk 'NR == 2 { print $1 }')
         case "$device" in /dev/*) ;; *) fail 'configuracao nao esta em disco local' ;; esac
-        if /usr/sbin/lsof -t "$base/networking" "$member" >/dev/null; then fail 'configuracao ou lock em uso'; else
-          code=$?; [ "$code" = 1 ] || fail 'nao foi possivel excluir detentor ativo'
-        fi
+        \(lsofGuardShell())
         stamp=$(/bin/date +%Y%m%d-%H%M%S)-$$
         backup="$base/networking.before-recovery-$stamp"
         orphan="$base/networking.lck.orphan-$stamp"
