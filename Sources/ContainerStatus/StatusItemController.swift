@@ -44,6 +44,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var vmnetState: VmnetState = .notInstalled
     private var vmCount: Int? = nil
     private var vmnetBusy = false
+    private var vmnetRecovery: VmnetLockRecovery.Snapshot?
     private var controlBusy: Bool {
         activity != .none || vmnetBusy || runtimeActivity.values.contains(true)
     }
@@ -569,10 +570,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                 vmnetActionItem.title = "Working..."
                 vmnetActionItem.isEnabled = false
             } else {
-                vmnetActionItem.title = "Enable Daemon"
-                vmnetActionItem.isEnabled = !busy && vmnetState == .stopped
+                vmnetActionItem.title = vmnetRecovery == nil ? "Enable Daemon" : "Recover Network Lock..."
+                vmnetActionItem.isEnabled = !busy && (vmnetRecovery == nil
+                    ? vmnetState == .stopped : vmCount == 0)
             }
-            place(vmnetActionItem, present: vmnetState != .running)
+            vmnetActionItem.toolTip = vmnetRecovery == nil ? nil
+                : "Preserva backup do lock orfao e tenta iniciar a rede. Requer nenhuma VM ativa."
+            place(vmnetActionItem, present: vmnetState != .running || vmnetRecovery != nil)
         } else {
             place(vmnetActionItem, present: false)
         }
@@ -928,15 +932,21 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
     // MARK: Rede virtual (vmnet) - somente subir, nunca derrubar
 
     @objc private func vmnetClicked(_ sender: NSMenuItem) {
-        guard !controlBusy, vmnet.fusionInstalled, vmnetState == .stopped else { return }
+        guard !controlBusy, vmnet.fusionInstalled else { return }
+        if vmnetRecovery != nil {
+            guard vmCount == 0 else { return }
+        } else {
+            guard vmnetState == .stopped else { return }
+        }
         vmnetBusy = true
         detail = nil
         detailIsLocal = false
         apply()
 
         let probe = vmnet
+        let recovery = vmnetRecovery
         Task.detached(priority: .userInitiated) { [weak self] in
-            let result = probe.start()
+            let result = probe.start(recovering: recovery)
             var status = probe.currentStatus()
             if result.exitedCleanly {
                 for _ in 0..<3 where status.state != .running {
@@ -944,17 +954,29 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                     status = probe.currentStatus()
                 }
             }
+            let diagnosis: VmnetLockRecovery.Diagnosis
+            if !result.exitedCleanly && (recovery != nil || result.stderr.contains("Failed to initialize")) {
+                diagnosis = VmnetLockRecovery.inspect()
+            } else {
+                diagnosis = .absent
+            }
             await MainActor.run { [weak self] in
-                self?.finishVmnet(result: result, state: status.state, vmCount: status.vmCount)
+                self?.finishVmnet(result: result, state: status.state, vmCount: status.vmCount,
+                                  recovery: diagnosis)
             }
         }
     }
 
-    private func finishVmnet(result: CLIRunResult, state: VmnetState, vmCount: Int?) {
+    private func finishVmnet(result: CLIRunResult, state: VmnetState, vmCount: Int?,
+                             recovery: VmnetLockRecovery.Diagnosis = .absent) {
         mutationEpoch += 1
         vmnetBusy = false
         vmnetState = state
         self.vmCount = vmCount
+        switch recovery {
+        case .eligible(let snapshot): vmnetRecovery = snapshot
+        case .absent, .unavailable: vmnetRecovery = nil
+        }
         // Cancelar o dialogo de senha nao e falha: sai silencioso.
         let canceled = result.stderr.contains("(-128)")  // osascript: exit 1, erro -128
         if (result.exitedCleanly && state == .running) || canceled {
@@ -963,6 +985,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
         } else {
             let message = result.exitedCleanly ? "" : ContainerCLI.firstLine(result.stderr)
             detail = "vmnet: \(message.isEmpty ? "Subida nao confirmada; consulte o diagnostico VMware" : message)"
+            if case .eligible = recovery {
+                detail = "vmnet: lock orfao confirmado; use Recover Network Lock (sem VMs ativas)"
+            } else if case .unavailable(let reason) = recovery {
+                detail = "vmnet: recuperacao recusada: \(reason)"
+            }
             detailIsLocal = true
         }
         apply()
@@ -1406,6 +1433,29 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSMenuDelegat
                                     state: .stopped, vmCount: nil)
         expect(toggleController.detailIsLocal && toggleController.errorItem.menu != nil,
                "exit zero vmnet sem processo nao confirma subida")
+        let orphan = VmnetLockRecovery.Snapshot(configurationDirectory: "/no/such/config",
+            memberName: "M123.lck", pid: 123, sha256: String(repeating: "a", count: 64),
+            directoryNumber: 1, memberNumber: 2, configurationNumber: 3)
+        toggleController.finishVmnet(
+            result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Failed to initialize"),
+            state: .stopped, vmCount: 0, recovery: .eligible(orphan))
+        expect(toggleController.vmnetActionItem.title == "Recover Network Lock..."
+               && toggleController.vmnetActionItem.isEnabled && toggleController.detailIsLocal,
+               "lock orfao oferece recuperacao explicita sem apagar o erro")
+        toggleController.vmCount = 1
+        toggleController.apply()
+        expect(!toggleController.vmnetActionItem.isEnabled,
+               "recuperacao do lock bloqueada com VM ativa")
+        toggleController.vmCount = nil
+        toggleController.apply()
+        expect(!toggleController.vmnetActionItem.isEnabled,
+               "recuperacao bloqueada quando contagem de VMs e desconhecida")
+        toggleController.finishVmnet(
+            result: CLIRunResult(exitCode: 1, spawned: true, stderr: "Failed to initialize"),
+            state: .stopped, vmCount: 0, recovery: .unavailable("Processo ativo"))
+        expect(toggleController.vmnetRecovery == nil
+               && toggleController.detail?.contains("recuperacao recusada: Processo ativo") == true,
+               "diagnostico duvidoso nao habilita recuperacao nem esconde a recusa")
         toggleController.finishRuntime(label: "Colima",
             result: CLIRunResult(exitCode: 0, spawned: true, stderr: "Starting..."), state: .stopped, expected: .running)
         expect(toggleController.detailIsLocal && toggleController.detail == "Colima: Operacao nao confirmada",

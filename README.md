@@ -85,6 +85,14 @@ nao executam em paralelo. No erro VMware `Failed to initialize`, o app consulta
 somente ate 8 KiB novos do log `vnetlib` para explicar um bloqueio confirmado
 da configuracao; nao remove locks automaticamente.
 
+Se a subida falhar por inicializacao, o app verifica o lock sem alterar arquivos.
+Um lock unico, local, confiavel e de processo comprovadamente encerrado habilita
+`Recover Network Lock...`. Essa acao exige nenhuma VM ativa e preserva copias com
+timestamp da configuracao e do lock antes de tentar iniciar a rede novamente,
+na mesma elevacao administrativa. Lock ativo, alterado, desconhecido ou com
+permissoes inseguras e recusado com motivo visivel. Nao inicie VMs durante a
+recuperacao. A acao nunca para servicos nem reconfigura a rede.
+
 
 **De onde vem o direito de startar/parar o daemon:** o servico Apple
 container nao e um daemon de sistema. Ele vive no dominio launchd do

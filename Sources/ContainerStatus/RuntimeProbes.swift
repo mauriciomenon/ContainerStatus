@@ -393,12 +393,22 @@ final class VmnetProbe: Sendable {
     /// arquivo sao do root, sem escrita de grupo/outros e sem symlink, e so
     /// entao executa o ./vmnet-cli verificado. Residual aceito: os daemons
     /// que o vmnet-cli dispara vem do proprio bundle da VMware.
-    func startScript() -> String {
+    func startScript(recovering snapshot: VmnetLockRecovery.Snapshot? = nil) -> String {
         // Ambiente zerado como root: o vmnet-cli le config de $HOME (gravavel
         // pelo usuario) e o do shell script herda o ambiente do app; com o
         // HOME do usuario, um config plantado viraria escrita de arquivo como root.
         let rootEnv = "/usr/bin/env -i HOME=/var/root PATH=/usr/bin:/bin:/usr/sbin:/sbin"
-        let shell = "\(verificationShell()); exec \(rootEnv) ./vmnet-cli --start"
+        let shell: String
+        if let snapshot {
+            // A recuperacao explicita e a subida compartilham uma unica elevacao.
+            shell = "\(verificationShell()); recovery_output=$( { \(VmnetLockRecovery.recoveryShell(snapshot: snapshot)); } 2>&1); recovery_exit=$?; "
+                + "if [ \"$recovery_exit\" -ne 0 ]; then /usr/bin/printf '%s\\n' \"$recovery_output\" >&2; exit \"$recovery_exit\"; fi; "
+                + "start_output=$(\(rootEnv) ./vmnet-cli --start 2>&1); start_exit=$?; "
+                + "if [ \"$start_exit\" -ne 0 ]; then /usr/bin/printf '%s\\n' \"Lock recuperado; VMware retornou exit $start_exit\" \"$start_output\" \"$recovery_output\" >&2; exit \"$start_exit\"; fi; "
+                + "/usr/bin/printf '%s\\n' \"$recovery_output\" \"$start_output\""
+        } else {
+            shell = "\(verificationShell()); exec \(rootEnv) ./vmnet-cli --start"
+        }
         let literal = shell.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "do shell script \"\(literal)\" with administrator privileges"
@@ -415,9 +425,18 @@ final class VmnetProbe: Sendable {
             + "/usr/bin/codesign --verify --strict -R='\(requirement)' ./vmnet-cli || exit 1"
     }
 
-    func start() -> CLIRunResult {
+    func start(recovering snapshot: VmnetLockRecovery.Snapshot? = nil) -> CLIRunResult {
         guard Self.isRootOwned(vmnetCliPath) else {
             return CLIRunResult(stderr: "vmnet-cli nao pertence ao root ou e gravavel; elevacao recusada")
+        }
+        if let snapshot {
+            guard currentStatus().vmCount == 0 else {
+                return CLIRunResult(stderr: "Recuperacao recusada: existe VM ativa ou a contagem nao foi confirmada")
+            }
+            guard case .eligible(let current) = VmnetLockRecovery.inspect(
+                configurationDirectory: snapshot.configurationDirectory), current == snapshot else {
+                return CLIRunResult(stderr: "Recuperacao recusada: o lock mudou ou nao e mais comprovadamente orfao")
+            }
         }
         // osascript com ambiente minimo: sem HOME do usuario e sem prefixos
         // gravaveis no PATH herdado pelo shell elevado.
@@ -429,7 +448,7 @@ final class VmnetProbe: Sendable {
                 logStart = (size.uint64Value, number.uint64Value)
             }
         } catch { NSLog("vmnet: log indisponivel antes da tentativa: %@", error.localizedDescription) }
-        var result = ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript()],
+        var result = ContainerCLI.runBinary("/usr/bin/osascript", arguments: ["-e", startScript(recovering: snapshot)],
                                             timeout: Self.startTimeout,
                                             environment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
         if !result.exitedCleanly && !result.stderr.contains("(-128)") {

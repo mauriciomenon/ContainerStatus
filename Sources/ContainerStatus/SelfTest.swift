@@ -500,6 +500,133 @@ enum SelfTest {
         try checkColima(in: temporary, expect: expect)
         try checkRuntimeRecipes(in: temporary, expect: expect)
         try checkVmnet(in: temporary, expect: expect)
+        try checkVmnetLockRecovery(in: temporary, expect: expect)
+    }
+
+    private static func checkVmnetLockRecovery(in temporary: URL,
+                                               expect: (Bool, String) -> Void) throws {
+        let manager = FileManager.default
+        let base = temporary.appendingPathComponent("vmnet-lock-fixture").resolvingSymlinksInPath()
+        try manager.createDirectory(at: base, withIntermediateDirectories: false,
+                                    attributes: [.posixPermissions: 0o755])
+        let configuration = base.appendingPathComponent("networking")
+        try "VERSION=1,0\n".write(to: configuration, atomically: true, encoding: .utf8)
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: configuration.path)
+        let lock = base.appendingPathComponent("networking.lck")
+        let member = lock.appendingPathComponent("M12345.lck")
+        func inspect(_ process: (pid_t) -> Bool? = { _ in false }) -> VmnetLockRecovery.Diagnosis {
+            VmnetLockRecovery.inspect(configurationDirectory: base.path, ownerUID: getuid(),
+                                      processExists: process)
+        }
+        func unavailable(_ diagnosis: VmnetLockRecovery.Diagnosis) -> Bool {
+            if case .unavailable = diagnosis { return true }
+            return false
+        }
+        expect(inspect() == .absent, "sem lock nao oferece recuperacao")
+        try manager.createDirectory(at: lock, withIntermediateDirectories: false,
+                                    attributes: [.posixPermissions: 0o777])
+        let header = "uuid=" + Array(repeating: "00", count: 16).joined(separator: "-")
+            + " 314159-123456789 1 X 123456789 lc=42"
+        var valid = Data(header.utf8)
+        valid.append(Data(repeating: 0, count: 512 - valid.count))
+        try valid.write(to: member)
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: member.path)
+        let initialConfiguration = try Data(contentsOf: configuration)
+        let diagnosis = inspect()
+        guard case let .eligible(snapshot) = diagnosis else {
+            expect(false, "lock unico de processo encerrado oferece recuperacao: \(diagnosis)")
+            return
+        }
+        expect(snapshot.pid == 314159 && snapshot.sha256.count == 64,
+               "snapshot identifica PID e hash do lock sem alterar arquivos")
+        expect(unavailable(inspect { _ in true }), "processo ativo impede recuperacao")
+        expect(unavailable(inspect { _ in nil }), "processo sem estado verificavel impede recuperacao")
+        expect(try Data(contentsOf: member) == valid && Data(contentsOf: configuration) == initialConfiguration,
+               "diagnostico preserva lock e configuracao")
+
+        try manager.setAttributes([.posixPermissions: 0o666], ofItemAtPath: member.path)
+        expect(unavailable(inspect()), "lock gravavel por outros nao e recuperavel")
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: member.path)
+        try manager.setAttributes([.posixPermissions: 0o666], ofItemAtPath: configuration.path)
+        expect(unavailable(inspect()), "configuracao gravavel por outros impede recuperacao")
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: configuration.path)
+        try manager.setAttributes([.posixPermissions: 0o777], ofItemAtPath: base.path)
+        expect(unavailable(inspect()), "diretorio de configuracao inseguro impede recuperacao")
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: base.path)
+        expect(unavailable(VmnetLockRecovery.inspect(configurationDirectory: base.path,
+                                                    ownerUID: getuid() + 1, processExists: { _ in false })),
+               "dono divergente impede recuperacao")
+
+        let extra = lock.appendingPathComponent("M54321.lck")
+        try valid.write(to: extra)
+        expect(unavailable(inspect()), "membro concorrente impede recuperacao")
+        try manager.removeItem(at: extra)
+        try Data("lock desconhecido".utf8).write(to: member)
+        expect(unavailable(inspect()), "lock truncado ou desconhecido impede recuperacao")
+        var malformed = Data(header.replacingOccurrences(of: "1 X 123456789", with: "1 X 987654321").utf8)
+        malformed.append(Data(repeating: 0, count: 512 - malformed.count))
+        try malformed.write(to: member)
+        expect(unavailable(inspect()), "execucao inconsistente impede recuperacao")
+        try manager.removeItem(at: member)
+        guard mkfifo(member.path, 0o644) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let fifoStarted = Date()
+        expect(unavailable(inspect()) && Date().timeIntervalSince(fifoStarted) < 1,
+               "FIFO no lock e recusado sem bloquear diagnostico")
+        try manager.removeItem(at: member)
+        try valid.write(to: member)
+
+        let held = base.appendingPathComponent("lock-preservado")
+        try manager.moveItem(at: lock, to: held)
+        try manager.createSymbolicLink(atPath: lock.path, withDestinationPath: held.path)
+        expect(unavailable(inspect()), "symlink de diretorio lock impede recuperacao")
+        try manager.removeItem(at: lock)
+        try manager.moveItem(at: held, to: lock)
+        let savedMember = base.appendingPathComponent("member-preservado")
+        try manager.moveItem(at: member, to: savedMember)
+        try manager.createSymbolicLink(atPath: member.path, withDestinationPath: savedMember.path)
+        expect(unavailable(inspect()), "symlink de membro impede recuperacao")
+        try manager.removeItem(at: member)
+        try manager.moveItem(at: savedMember, to: member)
+        let savedConfiguration = base.appendingPathComponent("config-preservada")
+        try manager.moveItem(at: configuration, to: savedConfiguration)
+        try manager.createSymbolicLink(atPath: configuration.path, withDestinationPath: savedConfiguration.path)
+        expect(unavailable(inspect()), "symlink da configuracao impede recuperacao")
+        try manager.removeItem(at: configuration)
+        try manager.moveItem(at: savedConfiguration, to: configuration)
+
+        var mutationError: Error?
+        let changed = inspect { _ in
+            do { try Data(repeating: 0, count: 512).write(to: member) }
+            catch { mutationError = error }
+            return false
+        }
+        expect(mutationError == nil && unavailable(changed), "lock alterado durante diagnostico e recusado")
+        try valid.write(to: member)
+        try manager.setAttributes([.posixPermissions: 0o644], ofItemAtPath: member.path)
+
+        let shell = VmnetLockRecovery.recoveryShell(snapshot: snapshot)
+        let removesFiles = shell.range(of: #"(?m)(^|[;\n])[ \t]*(?:/bin/)?rm(?:[ \t]|$)"#,
+                                       options: .regularExpression) != nil
+        expect(!shell.contains("--stop") && !shell.contains("--configure") && !removesFiles,
+               "recuperacao nao para servicos, reconfigura ou apaga locks")
+        expect(shell.contains("check_processes") && shell.contains("vmware-vmx vmnet-cli")
+               && shell.contains(snapshot.sha256) && shell.contains("validate_lock\ncheck_processes\n/bin/mv"),
+               "shell elevado revalida lock e concorrencia imediatamente antes de mover")
+        expect(ContainerCLI.runBinary("/bin/sh", arguments: ["-n", "-c", shell], timeout: 5).succeeded,
+               "shell de recuperacao compila")
+        if getuid() != 0 {
+            let refused = ContainerCLI.runBinary("/bin/sh", arguments: ["-c", shell], timeout: 5)
+            expect(!refused.succeeded && refused.stderr.contains("recuperacao exige administrador")
+                   && manager.fileExists(atPath: member.path),
+                   "shell sem elevacao recusa e preserva o lock")
+        }
+        let combined = VmnetProbe().startScript(recovering: snapshot)
+        let compiled = temporary.appendingPathComponent("vmnet-recovery.scpt").path
+        expect(ContainerCLI.runBinary("/usr/bin/osacompile", arguments: ["-o", compiled, "-e", combined],
+                                      timeout: 10).succeeded,
+               "script de recuperacao integrado compila sem executar rede")
     }
 
     /// Sonda vmnet com Fusion e pgrep simulados; script de subida com escape
